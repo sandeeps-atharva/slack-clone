@@ -124,7 +124,7 @@ export default function NotificationDropdown({
       <div className="flex-1 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-800">
         {sortedNotifications.length === 0 ? (
           <div className="px-4 py-6 text-sm text-gray-500 dark:text-gray-400 text-center">
-            You're all caught up!
+            You&apos;re all caught up!
           </div>
         ) : (
           sortedNotifications.map((notification) => {

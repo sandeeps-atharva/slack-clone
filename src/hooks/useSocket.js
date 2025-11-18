@@ -58,7 +58,8 @@ export default function useSocket({
   socketRef: externalSocketRef,
 }) {
   const dispatch = useDispatch();
-  const socketRef = externalSocketRef ?? useRef(null);
+  const internalSocketRef = useRef(null);
+  const socketRef = externalSocketRef ?? internalSocketRef;
   const [isConnected, setIsConnected] = useState(false);
 
   useEffect(() => {

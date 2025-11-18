@@ -20,6 +20,14 @@ const eslintConfig = [
       "next-env.d.ts",
     ],
   },
+  {
+    rules: {
+      // Turn off img tag warnings (we're using Cloudinary URLs which are external)
+      "@next/next/no-img-element": "off",
+      // Allow some missing dependencies in useEffect (refs are stable)
+      "react-hooks/exhaustive-deps": "warn",
+    },
+  },
 ];
 
 export default eslintConfig;

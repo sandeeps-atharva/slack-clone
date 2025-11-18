@@ -6,9 +6,9 @@ import {
   endCall as endCallAction,
   clearCallError,
   clearIncomingCall,
-  setActiveChannel,
   clearLastCallEnded,
 } from "../store/slices/callSlice";
+import { setActiveChannel } from "../store/slices/channelSlice";
 import { sendMessage } from "../store/slices/chatSlice";
 
 // Helper function to format duration

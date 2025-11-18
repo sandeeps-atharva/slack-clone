@@ -61,7 +61,7 @@ export default function UserSearchModal({
           ) : availableUsers.length === 0 ? (
             <div className="px-4 py-8 text-center text-gray-500 dark:text-gray-400 text-sm sm:text-base">
               {searchQuery.trim() ? (
-                <p>No users found matching "{searchQuery}"</p>
+                <p>No users found matching &quot;{searchQuery}&quot;</p>
               ) : (
                 <p>Start typing to search for users</p>
               )}
