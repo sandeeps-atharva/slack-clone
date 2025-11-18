@@ -1,18 +1,4 @@
 {
-  "version": 2,
-  "buildCommand": "npm install --legacy-peer-deps && npm run build",
-  "installCommand": "npm install --legacy-peer-deps",
-  "builds": [
-    {
-      "src": "package.json",
-      "use": "@vercel/next"
-    }
-  ],
-  "routes": [
-    {
-      "src": "/api/socketio",
-      "dest": "/api/socketio"
-    }
-  ]
+  "installCommand": "npm install --legacy-peer-deps"
 }
 
