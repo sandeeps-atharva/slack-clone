@@ -72,6 +72,10 @@ openssl rand -base64 32
 
 ## 🆘 Common Issues
 
+**Build Error: Peer Dependency Conflict?**
+- ✅ **Fixed!** The `.npmrc` file handles this automatically
+- If still failing, in Vercel: Settings → Build & Development Settings → Install Command: `npm install --legacy-peer-deps`
+
 **Database connection error?**
 - Double-check all DB_* variables in Vercel
 - Make sure Railway database is running

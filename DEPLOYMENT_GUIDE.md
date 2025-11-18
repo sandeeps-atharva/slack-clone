@@ -129,7 +129,14 @@ openssl rand -base64 32
 - **Framework Preset:** Next.js (auto-detected)
 - **Build Command:** `npm run build` (default)
 - **Output Directory:** `.next` (default)
-- **Install Command:** `npm install` (default)
+- **Install Command:** `npm install --legacy-peer-deps` ⚠️ **IMPORTANT: Change this!**
+
+**Important:** In Vercel's build settings, change the **Install Command** to:
+```
+npm install --legacy-peer-deps
+```
+
+This fixes the React 19 peer dependency conflict with `@emoji-mart/react`.
 
 ### 3.6 Deploy
 1. Click "Deploy"
@@ -178,6 +185,14 @@ Files will be stored in Cloudinary's cloud storage, which is perfect for product
 - Switch to Cloudinary or Vercel Blob Storage
 
 ### Build Errors
+
+**Peer Dependency Conflict (React 19):**
+If you see errors about `@emoji-mart/react` and React 19:
+- ✅ **Solution:** The `.npmrc` file is already created with `legacy-peer-deps=true`
+- ✅ **Also set in Vercel:** Go to Settings → Build & Development Settings → Install Command: `npm install --legacy-peer-deps`
+- This is safe because React 19 is backward compatible with React 18 code
+
+**Other Build Errors:**
 - Check build logs in Vercel dashboard
 - Ensure all dependencies are in `package.json`
 - Check Node.js version (Vercel uses Node 18+ by default)
