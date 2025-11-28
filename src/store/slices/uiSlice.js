@@ -9,6 +9,11 @@ const initialState = {
     email: "",
     password: "",
   },
+  validationErrors: {
+    username: "",
+    email: "",
+    password: "",
+  },
 };
 
 const uiSlice = createSlice({
@@ -36,6 +41,26 @@ const uiSlice = createSlice({
         email: "",
         password: "",
       };
+      state.validationErrors = {
+        username: "",
+        email: "",
+        password: "",
+      };
+    },
+    setValidationError: (state, action) => {
+      const { field, error } = action.payload;
+      state.validationErrors[field] = error;
+    },
+    clearValidationError: (state, action) => {
+      const field = action.payload;
+      state.validationErrors[field] = "";
+    },
+    clearAllValidationErrors: (state) => {
+      state.validationErrors = {
+        username: "",
+        email: "",
+        password: "",
+      };
     },
   },
 });
@@ -47,6 +72,9 @@ export const {
   setShowEmoji,
   updateFormData,
   resetFormData,
+  setValidationError,
+  clearValidationError,
+  clearAllValidationErrors,
 } = uiSlice.actions;
 
 export default uiSlice.reducer;

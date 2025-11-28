@@ -4,7 +4,7 @@ import MessageEditor from "./MessageEditor";
 import MessageReactions from "./MessageReactions";
 import OnlineStatusBadge from "./OnlineStatusBadge";
 import { renderMessageWithMentions } from "../../utils/renderMentions";
-import { Video, PhoneOff } from "lucide-react";
+import { Video, PhoneOff, UserPlus, UserMinus, Calendar, Users, Clock, Edit } from "lucide-react";
 
 export default function Message({
   message,
@@ -32,11 +32,18 @@ export default function Message({
   onToggleReaction,
   currentUserId,
   channelId,
+  hasRecipientOnline = false,
+  isRead = false,
 }) {
   if (!message) return null;
 
-  // Handle system messages (call_started, call_ended)
-  if (message.message_type === "call_started" || message.message_type === "call_ended") {
+  // Handle room booking notifications
+  if (message.message_type === "room_booking") {
+    return <RoomBookingMessage message={message} timestamp={timestamp} />;
+  }
+
+  // Handle system messages (call_started, call_ended, member_added, member_left, member_removed)
+  if (message.message_type === "call_started" || message.message_type === "call_ended" || message.message_type === "member_added" || message.message_type === "member_left" || message.message_type === "member_removed") {
     return <SystemMessage message={message} timestamp={timestamp} />;
   }
 
@@ -94,7 +101,12 @@ export default function Message({
             <div className="flex items-center justify-between gap-3 text-xs mt-1 opacity-80">
               <span>{timestamp}</span>
               <div className="flex items-center gap-2">
-                <MessageStatusIcon status={message.status} isOwn={isOwn} />
+                <MessageStatusIcon
+                  status={message.status}
+                  isOwn={isOwn}
+                  hasRecipientOnline={hasRecipientOnline}
+                  isRead={isRead}
+                />
               </div>
             </div>
 
@@ -189,10 +201,13 @@ function AttachmentPreviewContent({ message, isOwn }) {
   );
 }
 
-// System message component for call events
+// System message component for call events and member additions/removals
 function SystemMessage({ message, timestamp }) {
   const isCallStarted = message.message_type === "call_started";
   const isCallEnded = message.message_type === "call_ended";
+  const isMemberAdded = message.message_type === "member_added";
+  const isMemberLeft = message.message_type === "member_left";
+  const isMemberRemoved = message.message_type === "member_removed";
   
   // Extract username from message for call_started
   // Format: "Call started by John Appleseed"
@@ -210,6 +225,23 @@ function SystemMessage({ message, timestamp }) {
   const duration = durationMatch 
     ? `${durationMatch[1]}m ${durationMatch[2]}s`
     : null;
+
+  // Extract usernames from member_added message
+  // Format: "John Appleseed was added by Jane Doe"
+  const memberAddedMatch = message.message?.match(/(.+?)\s+was added by\s+(.+)/);
+  const addedUser = memberAddedMatch?.[1]?.trim() || "Someone";
+  const addedBy = memberAddedMatch?.[2]?.trim() || message.username || "Someone";
+
+  // Extract username from member_left message
+  // Format: "John Appleseed left the channel"
+  const memberLeftMatch = message.message?.match(/(.+?)\s+left the channel/);
+  const leftUser = memberLeftMatch?.[1]?.trim() || message.username || "Someone";
+
+  // Extract usernames from member_removed message
+  // Format: "John Appleseed was removed by Jane Doe"
+  const memberRemovedMatch = message.message?.match(/(.+?)\s+was removed by\s+(.+)/);
+  const removedUser = memberRemovedMatch?.[1]?.trim() || "Someone";
+  const removedBy = memberRemovedMatch?.[2]?.trim() || message.username || "Someone";
 
   return (
     <div className="flex items-center justify-center gap-2 my-2 px-2 w-full">
@@ -244,6 +276,128 @@ function SystemMessage({ message, timestamp }) {
           )}
         </>
       )}
+      {isMemberAdded && (
+        <>
+          <UserPlus className="w-4 h-4 text-blue-500 dark:text-blue-400 shrink-0" />
+          <span className="text-xs sm:text-sm text-gray-500 dark:text-gray-400">
+            {addedUser} was added by {addedBy}
+          </span>
+          {timestamp && (
+            <span className="text-xs text-gray-400 dark:text-gray-500 shrink-0">
+              {timestamp}
+            </span>
+          )}
+        </>
+      )}
+      {isMemberLeft && (
+        <>
+          <UserMinus className="w-4 h-4 text-orange-500 dark:text-orange-400 shrink-0" />
+          <span className="text-xs sm:text-sm text-gray-500 dark:text-gray-400">
+            {leftUser} left the channel
+          </span>
+          {timestamp && (
+            <span className="text-xs text-gray-400 dark:text-gray-500 shrink-0">
+              {timestamp}
+            </span>
+          )}
+        </>
+      )}
+      {isMemberRemoved && (
+        <>
+          <UserMinus className="w-4 h-4 text-red-500 dark:text-red-400 shrink-0" />
+          <span className="text-xs sm:text-sm text-gray-500 dark:text-gray-400">
+            {removedUser} was removed by {removedBy}
+          </span>
+          {timestamp && (
+            <span className="text-xs text-gray-400 dark:text-gray-500 shrink-0">
+              {timestamp}
+            </span>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// Room booking notification message component
+function RoomBookingMessage({ message, timestamp }) {
+  let bookingData = null;
+  
+  try {
+    // Parse booking data from message
+    if (typeof message.message === 'string') {
+      bookingData = JSON.parse(message.message);
+    } else if (typeof message.message === 'object') {
+      bookingData = message.message;
+    }
+  } catch (error) {
+    console.error("Error parsing booking message:", error);
+    return null;
+  }
+
+  if (!bookingData) return null;
+
+  const { room_name, booked_by, purpose, description, start_time, end_time, date, participants } = bookingData;
+
+  return (
+    <div className="flex items-start gap-3 my-3 px-4 py-3 w-full max-w-2xl mx-auto">
+      {/* Green vertical line */}
+      <div className="w-1 h-full bg-green-500 rounded-full shrink-0 min-h-[80px]" />
+      
+      {/* Booking card */}
+      <div className="flex-1 bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-4">
+        {/* Room name and booked by */}
+        <div className="mb-3">
+          <h3 className="text-base font-semibold text-blue-600 dark:text-blue-400 mb-1">
+            {room_name} is occupied by {booked_by}
+          </h3>
+        </div>
+
+        {/* Purpose */}
+        <div className="mb-2">
+          <span className="text-sm text-gray-700 dark:text-gray-300">
+            <span className="font-medium">Purpose:</span> {purpose}
+          </span>
+        </div>
+
+        {/* Time and Date */}
+        <div className="mb-2 flex items-center gap-2">
+          <Clock className="w-4 h-4 text-gray-500 dark:text-gray-400 shrink-0" />
+          <span className="text-sm text-gray-700 dark:text-gray-300">
+            <span className="font-medium">Time:</span> {start_time} - {end_time} | {date}
+          </span>
+        </div>
+
+        {/* Team Members */}
+        {participants && participants.trim() !== '' && (
+          <div className="mb-2 flex items-start gap-2">
+            <Users className="w-4 h-4 text-gray-500 dark:text-gray-400 shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <span className="text-sm text-gray-700 dark:text-gray-300">
+                <span className="font-medium">Team Members:</span>{" "}
+                <span className="text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 px-1.5 py-0.5 rounded">
+                  {participants}
+                </span>
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Description with edit icon */}
+        {description && description.trim() !== '' && (
+          <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700 flex items-start gap-2">
+            <Edit className="w-4 h-4 text-gray-400 dark:text-gray-500 shrink-0 mt-0.5" />
+            <span className="text-sm text-gray-600 dark:text-gray-400">{description}</span>
+          </div>
+        )}
+
+        {/* Timestamp */}
+        {timestamp && (
+          <div className="mt-2 text-xs text-gray-400 dark:text-gray-500">
+            {timestamp}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

@@ -245,14 +245,45 @@ export default async function handler(req, res) {
         }
       }
 
-      return res.status(201).json({
+      const newChannel = {
         id: channelId,
         name: normalizedName,
         slug: slugCandidate,
         topic,
         is_private: isPrivate ? 1 : 0,
         role: "owner",
-      });
+      };
+
+      // Emit socket event to notify all members about the new channel
+      try {
+        const io = res.socket.server.io;
+        if (io) {
+          // Get all members with their roles for this channel
+          const [memberRows] = await pool.execute(
+            "SELECT user_id, role FROM channel_members WHERE channel_id = ?",
+            [channelId]
+          );
+          
+          // Emit separate event to each member with their specific role
+          memberRows.forEach((member) => {
+            const channelWithRole = {
+              ...newChannel,
+              role: member.role,
+            };
+            
+            io.emit("channel:created", {
+              channel: channelWithRole,
+              memberIds: memberRows.map((row) => row.user_id),
+              userId: member.user_id, // Include userId so each client knows if it's for them
+            });
+          });
+        }
+      } catch (socketError) {
+        console.error("Failed to emit channel:created event:", socketError);
+        // Don't fail the request if socket emission fails
+      }
+
+      return res.status(201).json(newChannel);
     } catch (error) {
       console.error("Create channel error:", error);
       return res.status(500).json({ error: "Failed to create channel" });

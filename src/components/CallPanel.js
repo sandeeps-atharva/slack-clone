@@ -21,6 +21,7 @@ import { useLocalMedia } from "../hooks/useLocalMedia";
 import { usePeerConnections } from "../hooks/usePeerConnections";
 import useCallActions from "../hooks/useCallActions";
 import ParticipantVideo from "./ParticipantVideo";
+import useCamera from "@/hooks/useCamera";
 
 export default function CallPanel({ socket, channel }) {
   const dispatch = useDispatch();
@@ -40,6 +41,7 @@ export default function CallPanel({ socket, channel }) {
   const { user } = useSelector((state) => state.auth);
   const activeChannelId = useSelector((state) => state.channels?.activeChannelId);
   const incomingCall = useSelector((state) => state.call.incomingCall);
+  const {closeCamera} = useCamera();
   
   // Use callActions hook to get endCall function that sends system message
   const socketRef = useRef(socket);
@@ -83,13 +85,26 @@ export default function CallPanel({ socket, channel }) {
     }
 
     return () => {
-      if (!isInCall && localStream) {
+      if (!isInCall) {
+        // Stop all tracks from localStream
+        if (localStream) {
+          localStream.getTracks().forEach((track) => {
+            track.stop();
+          });
+        }
+        // Stop media from useLocalMedia hook
         stopMedia();
+        // Close camera from useCamera hook
+        closeCamera();
+        // Clear video element
+        if (localVideoRef.current) {
+          localVideoRef.current.srcObject = null;
+        }
         dispatch(setLocalStream(null));
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isInCall, callChannelId, socket, user, dispatch]);
+  }, [isInCall, callChannelId, socket, user, dispatch, localStream, stopMedia, closeCamera]);
 
   // Setup peer connections
   usePeerConnections(socket, localStream, callChannelId, user);
@@ -97,7 +112,13 @@ export default function CallPanel({ socket, channel }) {
   // Display local video
   useEffect(() => {
     const videoElement = localVideoRef.current;
-    if (!videoElement || !localStream) return;
+    if (!videoElement || !localStream) {
+      // If no stream, ensure video element is cleared
+      if (videoElement) {
+        videoElement.srcObject = null;
+      }
+      return;
+    }
 
     videoElement.srcObject = localStream;
     const playPromise = videoElement.play();
@@ -108,22 +129,77 @@ export default function CallPanel({ socket, channel }) {
     }
 
     return () => {
-      videoElement.srcObject = null;
+      if (videoElement) {
+        videoElement.srcObject = null;
+      }
+      // Stop all tracks when video element is unmounted
+      if (localStream) {
+        localStream.getTracks().forEach((track) => {
+          track.stop();
+        });
+      }
     };
   }, [localStream]);
 
-  // Cleanup on unmount
+  // Cleanup on unmount - ensure camera is always turned off
   useEffect(() => {
     return () => {
       stopMedia();
+      closeCamera();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [socket, callChannelId]);
 
+  // Close camera when call panel is closed (X button or any other way)
+  useEffect(() => {
+    if (!showCallPanel && !isInCall) {
+      // Panel was closed and call ended - ensure camera is off
+      closeCamera();
+      stopMedia();
+    }
+  }, [showCallPanel, isInCall, closeCamera, stopMedia]);
+
+  // Close camera when call ends (isInCall becomes false)
+  useEffect(() => {
+    if (!isInCall) {
+      // Call ended - ensure camera is off immediately
+      // Stop all tracks from localStream if it still exists
+      if (localStream) {
+        localStream.getTracks().forEach((track) => {
+          track.stop();
+        });
+      }
+      stopMedia();
+      closeCamera();
+      
+      // Also clear video element srcObject
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = null;
+      }
+    }
+  }, [isInCall, localStream, closeCamera, stopMedia]);
+
   const handleEndCall = async () => {
+    // First, stop all media tracks immediately (before Redux state updates)
+    if (localStream) {
+      localStream.getTracks().forEach((track) => {
+        track.stop();
+      });
+    }
+    
+    // Clear video element immediately
+    if (localVideoRef.current) {
+      localVideoRef.current.srcObject = null;
+    }
+    
+    // Stop media from useLocalMedia hook (stops streamRef)
+    stopMedia();
+    
+    // Ensure camera from useCamera is also closed (same logic as attachment camera)
+    closeCamera();
+    
     // Use callActions.endCall which handles system message sending
     await callActions.endCall(callChannelId);
-    stopMedia();
   };
 
   const handleToggleVideo = () => {

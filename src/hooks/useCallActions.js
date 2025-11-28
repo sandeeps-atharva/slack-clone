@@ -10,6 +10,7 @@ import {
   clearLastCallEnded,
 } from "../store/slices/callSlice";
 import { sendMessage } from "../store/slices/chatSlice";
+import { addCallToHistory } from "../store/slices/callHistorySlice";
 
 // Helper function to format duration
 function formatDuration(ms) {
@@ -25,6 +26,7 @@ export default function useCallActions(socketRef, activeChannelId, incomingCall)
   const { user } = useSelector((state) => state.auth);
   const token = useSelector((state) => state.auth.token);
   const callStartTime = useSelector((state) => state.call.callStartTime);
+  const { channels } = useSelector((state) => state.channels);
 
   const startCall = useCallback(async () => {
     if (activeChannelId == null || activeChannelId === "") return;
@@ -86,7 +88,49 @@ export default function useCallActions(socketRef, activeChannelId, incomingCall)
       // Calculate duration from call start time
       const duration = callStartTime ? Date.now() - callStartTime : null;
       
+      // Find channel info for call history
+      const channel = channels.find(c => c.id === callChannelId);
+      
       dispatch(endCallAction(callChannelId ?? null));
+      
+      // Add to call history
+      if (callChannelId && user) {
+        dispatch(addCallToHistory({
+          channelId: callChannelId,
+          channelName: channel?.name || "Unknown Channel",
+          callType: "video", // Default to video, could be enhanced to track actual type
+          status: "completed",
+          initiatedBy: user.id,
+          duration: duration,
+          participants: [], // Could be enhanced to track actual participants
+          timestamp: new Date().toISOString(),
+          endedAt: new Date().toISOString(),
+        }));
+
+        // Also save to database via API
+        try {
+          await fetch("/api/call-history", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              channelId: callChannelId,
+              channelName: channel?.name || "Unknown Channel",
+              callType: "video",
+              status: "completed",
+              initiatedBy: user.id,
+              duration: duration,
+              participants: [],
+              startedAt: callStartTime ? new Date(callStartTime).toISOString() : new Date().toISOString(),
+              endedAt: new Date().toISOString(),
+            }),
+          });
+        } catch (error) {
+          console.error("Failed to save call history:", error);
+        }
+      }
       
       // Send system message for call ended
       if (token && user && callChannelId) {
@@ -115,7 +159,7 @@ export default function useCallActions(socketRef, activeChannelId, incomingCall)
         }
       }
     },
-    [socketRef, dispatch, token, user, callStartTime]
+    [socketRef, dispatch, token, user, callStartTime, channels]
   );
 
   return {

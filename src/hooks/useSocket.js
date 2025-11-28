@@ -7,6 +7,7 @@ import {
   applyIncomingMessageUpdate,
   removeMessage,
   updateMessageReaction,
+  updateMessageReadStatus,
   incrementUnreadCount,
 } from "../store/slices/chatSlice";
 import {
@@ -21,6 +22,7 @@ import {
   setUserOffline,
   setOnlineUsers,
 } from "../store/slices/onlineStatusSlice";
+import { addChannel, removeMemberFromChannel, updateChannelFromSocket, fetchChannelMembers } from "../store/slices/channelSlice";
 import {
   addNotification,
   DEFAULT_NOTIFICATION_PREFERENCES,
@@ -56,6 +58,7 @@ export default function useSocket({
   playNotificationSound,
   setTypingUsers,
   socketRef: externalSocketRef,
+  tokenRef,
 }) {
   const dispatch = useDispatch();
   const socketRef = externalSocketRef ?? useRef(null);
@@ -128,16 +131,13 @@ export default function useSocket({
 
     socketRef.current.on("receive_message", (msg) => {
       const channelId = Number(msg.channel_id ?? msg.channelId ?? msg.channel);
-      if (
-        Number.isFinite(channelId) &&
-        !joinedChannelIdsRef.current.has(channelId)
-      ) {
+      if (!Number.isFinite(channelId)) {
         return;
       }
 
       const currentUser = userRef.current;
       const activeChannelIdCurrent = activeChannelIdRef.current;
-      
+
       // Check if this message should be marked as unread
       const authorId = Number(
         msg.user_id ?? msg.userId ?? msg.author_id ?? msg.authorId
@@ -153,8 +153,49 @@ export default function useSocket({
           !!currentUsername &&
           authorUsername.toLowerCase() === currentUsername.toLowerCase());
 
-      // Don't increment unread count for own messages
-      if (isOwnMessage) {
+      // If channel is not in our list yet, it might be a new DM channel
+      // Create a temporary channel entry so the message can be processed
+      let channelInfo = channelsByIdRef.current[channelId] || null;
+      const isChannelJoined = joinedChannelIdsRef.current.has(channelId);
+      
+      if (!channelInfo && !isChannelJoined && !isOwnMessage && currentUser?.id && authorId && authorId !== currentUser.id) {
+        // This is likely a new DM channel - create a temporary channel entry
+        const dmMetadata = {
+          type: "dm",
+          participants: [
+            { id: currentUser.id, username: currentUser.username },
+            { id: authorId, username: authorUsername },
+          ],
+        };
+
+        const tempChannel = {
+          id: channelId,
+          name: authorUsername || "Direct Message",
+          is_private: 1,
+          topic: JSON.stringify(dmMetadata),
+          role: "member",
+          metadata: dmMetadata, // Add metadata directly for easier access
+        };
+        
+        // Add to Redux store
+        dispatch(addChannel(tempChannel));
+        
+        // Update refs
+        channelsByIdRef.current[channelId] = tempChannel;
+        joinedChannelIdsRef.current.add(channelId);
+        
+        channelInfo = tempChannel;
+      }
+
+      // If still no channel info and not joined, skip processing
+      // But allow system messages to go through
+      const isSystemMessage = msg.message_type === "call_started" || msg.message_type === "call_ended" || msg.message_type === "member_added" || msg.message_type === "member_left" || msg.message_type === "member_removed" || msg.message_type === "room_booking";
+      if (!channelInfo && !isChannelJoined && !isSystemMessage) {
+        return;
+      }
+
+      // Don't increment unread count for own messages or system messages
+      if (isOwnMessage || isSystemMessage) {
         dispatch(
           receiveMessage({
             ...msg,
@@ -179,7 +220,10 @@ export default function useSocket({
         dispatch(incrementUnreadCount(channelId));
       }
 
-      const channelInfo = channelsByIdRef.current[channelId] || null;
+      // Get channel info again in case it was just added
+      if (!channelInfo) {
+        channelInfo = channelsByIdRef.current[channelId] || null;
+      }
       const isDMChannel =
         channelInfo?.metadata?.type === "dm" || channelInfo?.is_private;
 
@@ -291,6 +335,19 @@ export default function useSocket({
       dispatch(removeMessage(payload));
     });
 
+    socketRef.current.on("messages:read", (payload) => {
+      if (!payload || !payload.channelId || !payload.messageIds || !payload.readBy) {
+        return;
+      }
+      dispatch(
+        updateMessageReadStatus({
+          channelId: payload.channelId,
+          messageIds: Array.isArray(payload.messageIds) ? payload.messageIds : [payload.messageIds],
+          readBy: payload.readBy,
+        })
+      );
+    });
+
     // Set up message:reaction listener for new socket
     setupReactionListener(socketRef.current);
 
@@ -384,22 +441,166 @@ export default function useSocket({
       }
     });
 
+    // Listen for new channel creation (especially for DM channels)
+    socketRef.current.on("channel:created", ({ channel, memberIds, userId }) => {
+      const currentUser = userRef.current;
+      // Only add channel if this event is for the current user
+      // Check both userId (if provided) and memberIds array
+      const isForCurrentUser = 
+        (userId && userId === currentUser?.id) ||
+        (currentUser?.id && channel && Array.isArray(memberIds) && memberIds.includes(currentUser.id));
+      
+      if (isForCurrentUser) {
+        dispatch(addChannel(channel));
+        
+        // Update refs to mark channel as joined
+        if (channel.id) {
+          channelsByIdRef.current[channel.id] = channel;
+          joinedChannelIdsRef.current.add(channel.id);
+        }
+      }
+    });
+
+    // Listen for when a user is added to a channel (invited by owner)
+    socketRef.current.on("member:added_to_channel", ({ channel, userId }) => {
+      const currentUser = userRef.current;
+      // Only add channel if this event is for the current user
+      if (currentUser?.id && channel && userId === currentUser.id) {
+        // Sanitize channel data to ensure it's not misidentified as a DM
+        const sanitizedChannel = {
+          ...channel,
+          // Ensure name is always present and is a string
+          name: channel.name || "",
+          // Ensure topic is a string (empty if null)
+          topic: channel.topic != null ? String(channel.topic) : "",
+          // Ensure is_private is a number
+          is_private: channel.is_private != null ? Number(channel.is_private) : 0,
+        };
+        
+        // If channel has a name AND is NOT private, ensure topic doesn't have DM metadata
+        // For private channels (DMs), we need to keep the topic metadata to identify participants
+        if (sanitizedChannel.name && sanitizedChannel.name.trim() !== "" && sanitizedChannel.is_private === 0) {
+          try {
+            if (sanitizedChannel.topic) {
+              const parsed = JSON.parse(sanitizedChannel.topic);
+              if (parsed && parsed.type === "dm") {
+                // Topic incorrectly has DM metadata for a non-private channel - clear it
+                sanitizedChannel.topic = "";
+              }
+            }
+          } catch (e) {
+            // Topic is not valid JSON, which is fine for regular channels
+            // Keep it as is
+          }
+        }
+        
+        dispatch(addChannel(sanitizedChannel));
+        
+        // Update refs to mark channel as joined
+        if (sanitizedChannel.id) {
+          channelsByIdRef.current[sanitizedChannel.id] = sanitizedChannel;
+          joinedChannelIdsRef.current.add(sanitizedChannel.id);
+        }
+      }
+    });
+
+    // Listen for when a user leaves a channel
+    socketRef.current.on("member:left_channel", ({ channelId, userId }) => {
+      const currentUser = userRef.current;
+      const activeChannelIdCurrent = activeChannelIdRef.current;
+      
+      // Only update if this is for a channel we're currently viewing
+      // and it's not the current user leaving (they'll be handled by leaveChannel action)
+      if (channelId && userId && currentUser?.id && userId !== currentUser.id) {
+        // Remove the member from the member list
+        dispatch(removeMemberFromChannel({ channelId, userId }));
+      }
+    });
+
+    // Listen for channel updates (name, topic, privacy changes)
+    socketRef.current.on("channel:updated", ({ channel, userId }) => {
+      const currentUser = userRef.current;
+      // Only update if this event is for the current user
+      if (currentUser?.id && channel && userId === currentUser.id) {
+        // Sanitize channel data to prevent DM misidentification
+        const sanitizedChannel = {
+          ...channel,
+          name: channel.name || "",
+          topic: channel.topic != null ? String(channel.topic) : "",
+          is_private: channel.is_private != null ? Number(channel.is_private) : 0,
+        };
+        
+        // If channel has a name, ensure topic doesn't have DM metadata
+        if (sanitizedChannel.name && sanitizedChannel.name.trim() !== "") {
+          try {
+            if (sanitizedChannel.topic) {
+              const parsed = JSON.parse(sanitizedChannel.topic);
+              if (parsed && parsed.type === "dm") {
+                // Topic incorrectly has DM metadata - clear it
+                sanitizedChannel.topic = "";
+              }
+            }
+          } catch (e) {
+            // Topic is not valid JSON, which is fine for regular channels
+          }
+        }
+        
+        dispatch(updateChannelFromSocket(sanitizedChannel));
+        
+        // Update refs
+        if (sanitizedChannel.id) {
+          channelsByIdRef.current[sanitizedChannel.id] = sanitizedChannel;
+        }
+      }
+    });
+
+    // Listen for ownership transfer events
+    socketRef.current.on("channel:ownership_transferred", ({ channelId, newOwnerId, userId }) => {
+      const currentUser = userRef.current;
+      const activeChannelIdCurrent = activeChannelIdRef.current;
+      // Only process if this event is for the current user
+      if (currentUser?.id && channelId && userId === currentUser.id) {
+        // If the current user is the new owner, update their role in the channel
+        if (newOwnerId === currentUser.id) {
+          const channel = channelsByIdRef.current[channelId];
+          if (channel) {
+            const updatedChannel = {
+              ...channel,
+              role: "owner",
+            };
+            dispatch(updateChannelFromSocket(updatedChannel));
+            channelsByIdRef.current[channelId] = updatedChannel;
+          }
+        }
+        // Refetch channel members to update roles if this is the active channel
+        if (channelId === activeChannelIdCurrent && tokenRef?.current) {
+          dispatch(fetchChannelMembers({ token: tokenRef.current, channelId }));
+        }
+      }
+    });
+
     return () => {
       socketRef.current?.off("receive_message");
       socketRef.current?.off("typing:start");
       socketRef.current?.off("typing:stop");
       socketRef.current?.off("message:edit");
       socketRef.current?.off("message:delete");
+      socketRef.current?.off("messages:read");
       socketRef.current?.off("message:reaction");
       socketRef.current?.off("call:started");
       socketRef.current?.off("call:ended");
       socketRef.current?.off("user:online");
       socketRef.current?.off("user:offline");
       socketRef.current?.off("users:online");
+      socketRef.current?.off("channel:created");
+      socketRef.current?.off("member:added_to_channel");
+      socketRef.current?.off("member:left_channel");
+      socketRef.current?.off("channel:updated");
+      socketRef.current?.off("channel:ownership_transferred");
       socketRef.current?.disconnect();
       socketRef.current = null;
     };
-  }, [dispatch, user, channelsByIdRef, joinedChannelIdsRef, userRef, activeChannelIdRef, isInCallRef, callChannelIdRef, incomingCallRef, activeThreadIdRef, notificationPreferencesRef, playNotificationSound, setTypingUsers, socketRef]);
+  }, [dispatch, user, channelsByIdRef, joinedChannelIdsRef, userRef, activeChannelIdRef, isInCallRef, callChannelIdRef, incomingCallRef, activeThreadIdRef, notificationPreferencesRef, playNotificationSound, setTypingUsers, socketRef, tokenRef]);
 
   useEffect(() => {
     if (isAuthenticated && user && socketRef.current) {

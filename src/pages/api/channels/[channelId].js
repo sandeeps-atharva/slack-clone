@@ -69,10 +69,8 @@ export default async function handler(req, res) {
     const updates = [];
     const params = [];
 
-    const isModeratorOrOwner = ["owner", "moderator"].includes(membership.role);
-
-    if (!isModeratorOrOwner) {
-      return res.status(403).json({ error: "Only channel moderators or owners can update settings" });
+    if (membership.role !== "owner") {
+      return res.status(403).json({ error: "Only channel owners can update settings" });
     }
 
     if (typeof name === "string") {
@@ -112,6 +110,40 @@ export default async function handler(req, res) {
     }
 
     const updatedChannel = await getChannel(channelId);
+    
+    // Get all members of the channel to emit update event
+    const [memberRows] = await pool.execute(
+      "SELECT user_id, role FROM channel_members WHERE channel_id = ?",
+      [channelId]
+    );
+    
+    // Emit socket event to notify all channel members about the update
+    try {
+      const io = res.socket.server.io;
+      if (io) {
+        const channelWithRole = {
+          ...updatedChannel,
+          role: membership.role,
+        };
+        
+        // Emit to all members of the channel
+        memberRows.forEach((member) => {
+          const channelForMember = {
+            ...channelWithRole,
+            role: member.role, // Each member gets their own role
+          };
+          
+          io.emit("channel:updated", {
+            channel: channelForMember,
+            userId: member.user_id,
+          });
+        });
+      }
+    } catch (socketError) {
+      console.error("Failed to emit channel:updated event:", socketError);
+      // Don't fail the request if socket emission fails
+    }
+    
     return res.status(200).json({
       ...updatedChannel,
       role: membership.role,

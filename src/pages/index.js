@@ -15,6 +15,8 @@ import {
   clearChat,
   markChannelAsRead,
   setChannelLastReadTimestamp,
+  markMessagesAsRead,
+  markMessageAsDelivered,
 } from "../store/slices/chatSlice";
 import {
   fetchChannels,
@@ -23,6 +25,7 @@ import {
   createDM,
   fetchChannelMembers,
   clearChannelError,
+  leaveChannel,
 } from "../store/slices/channelSlice";
 import { setShowEmoji } from "../store/slices/uiSlice";
 import { clearCallError, clearIncomingCall, startCall as startCallAction, openCallPanel } from "../store/slices/callSlice";
@@ -34,6 +37,13 @@ import {
   resetNotificationPreferences,
   markNotificationsByChannel,
 } from "../store/slices/notificationSlice";
+import {
+  selectCallHistory,
+  selectCallHistoryLoading,
+  selectCallHistoryError,
+  fetchCallHistory,
+  removeCallFromHistory,
+} from "../store/slices/callHistorySlice";
 
 import useTheme from "../hooks/useTheme";
 import useNotificationActions from "../hooks/useNotificationActions";
@@ -55,6 +65,7 @@ import ChatFooter from "../components/chat/ChatFooter";
 import MessageList from "../components/chat/MessageList";
 import ChannelSidebar from "../components/ChannelSidebar";
 import NotificationDropdown from "../components/NotificationDropdown";
+import CallHistoryDropdown from "../components/CallHistoryDropdown";
 import AttachmentPreview from "../components/chat/AttachmentPreview";
 import CameraCapture from "../components/chat/CameraCapture";
 import ThreadPanel from "../components/ThreadPanel";
@@ -63,6 +74,7 @@ import IncomingCallNotification from "../components/IncomingCallNotification";
 import UserSearchModal from "../components/UserSearchModal";
 import ChannelSettingsModal from "../components/ChannelSettingsModal";
 import ProfileSidebar from "../components/ProfileSidebar";
+import RoomBookingSidebar from "../components/RoomBookingSidebar";
 import { extractMentions } from "../utils/renderMentions";
 
 const parseChannelTopic = (topic) => {
@@ -88,20 +100,60 @@ const normalizeMentionValue = (value) => (value ?? "").toString().trim().toLower
 
 const computeChannelDisplayName = (channel, currentUser) => {
   if (!channel) return "";
+  
+  // FIRST: Check if it's a DM channel by looking at metadata
+  // This is important because DM channels might have a name set, but we should
+  // always show the other participant's name, not the channel name
   const metadata = parseChannelTopic(channel.topic);
   const currentUsername = currentUser?.username?.toLowerCase();
-  const currentId = currentUser?.id;
+  const currentId = currentUser?.id ? Number(currentUser.id) : null;
+  
   if (metadata?.type === "dm" && Array.isArray(metadata.participants)) {
-    const other = metadata.participants.find((participant) => {
-      if (currentId != null && participant?.id != null) return participant.id !== currentId;
-      return participant?.username?.toLowerCase() !== currentUsername;
+    // Filter out the current user and find the other participant
+    const otherParticipants = metadata.participants.filter((participant) => {
+      if (!participant) return false;
+      
+      // First try to match by ID (most reliable)
+      if (currentId != null && participant.id != null) {
+        const participantId = Number(participant.id);
+        if (!isNaN(participantId) && participantId === currentId) {
+          return false; // This is the current user, exclude them
+        }
+      }
+      
+      // Then try to match by username (fallback)
+      if (currentUsername && participant.username) {
+        const participantUsername = String(participant.username).toLowerCase().trim();
+        if (participantUsername === currentUsername) {
+          return false; // This is the current user, exclude them
+        }
+      }
+      
+      return true; // This is not the current user, include them
     });
-    if (other?.username) return other.username;
-  }
-  if (channel.is_private && (!channel.name || channel.name.trim() === "")) {
+    
+    // Return the first other participant's username, or fallback
+    if (otherParticipants.length > 0 && otherParticipants[0]?.username) {
+      return String(otherParticipants[0].username).trim();
+    }
+    
+    // If no other participant found, fallback to "Direct Message"
     return "Direct Message";
   }
-  return channel.name || "Channel";
+  
+  // If it's not a DM, use the channel name
+  const channelName = channel.name ? String(channel.name).trim() : "";
+  
+  if (channelName !== "") {
+    return channelName;
+  }
+  
+  // Fallback for private channels without names
+  if (channel.is_private) {
+    return "Direct Message";
+  }
+  
+  return "Channel";
 };
 
 const inferMessageType = (file) => {
@@ -164,9 +216,15 @@ export default function ChatPage() {
   const notifications = useSelector(selectNotifications);
   const unreadNotificationCount = useSelector(selectUnreadNotificationCount);
   const notificationPreferences = useSelector(selectNotificationPreferences);
+  
+  // Call history selectors
+  const callHistory = useSelector(selectCallHistory);
+  const callHistoryLoading = useSelector(selectCallHistoryLoading);
+  const callHistoryError = useSelector(selectCallHistoryError);
 
   const [newMessage, setNewMessage] = useState("");
   const [showUserSearchModal, setShowUserSearchModal] = useState(false);
+  const [showCallHistory, setShowCallHistory] = useState(false);
   const [dmUserSearchQuery, setDmUserSearchQuery] = useState("");
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [pendingCallRejoinId, setPendingCallRejoinId] = useState(null);
@@ -180,6 +238,7 @@ export default function ChatPage() {
   const [editingInitialAttachment, setEditingInitialAttachment] = useState(null);
   const [editingAttachmentMode, setEditingAttachmentMode] = useState("none");
   const [showProfileSidebar, setShowProfileSidebar] = useState(false);
+  const [showRoomBooking, setShowRoomBooking] = useState(false);
   const [isClearingChat, setIsClearingChat] = useState(false);
 
   const { theme, toggleTheme } = useTheme();
@@ -190,12 +249,25 @@ export default function ChatPage() {
     }
   }, [dispatch]);
 
+  // Fetch call history when user is authenticated
+  useEffect(() => {
+    if (isAuthenticated && token) {
+      dispatch(fetchCallHistory({ token }));
+    }
+  }, [isAuthenticated, token, dispatch]);
+
   const notificationButtonRef = useRef(null);
+  const callHistoryButtonRef = useRef(null);
   const emojiPickerRef = useRef(null);
   const notificationPreferencesRef = useRef(notificationPreferences);
+  const isUpdatingRouteRef = useRef(false);
+  const tokenRef = useRef(token);
   useEffect(() => {
     notificationPreferencesRef.current = notificationPreferences;
   }, [notificationPreferences]);
+  useEffect(() => {
+    tokenRef.current = token;
+  }, [token]);
 
   const normalizeChannelId = useCallback((value) => {
     if (value == null) return null;
@@ -207,6 +279,10 @@ export default function ChatPage() {
   const updateRouteChannel = useCallback(
     (channelId) => {
       if (!router.isReady) return;
+      // Only update route on the chat page (index page)
+      if (router.pathname !== "/") return;
+      // Prevent infinite loops
+      if (isUpdatingRouteRef.current) return;
 
       const currentParam = router.query?.channel;
       if (channelId == null) {
@@ -218,6 +294,7 @@ export default function ChatPage() {
         return;
       }
 
+      isUpdatingRouteRef.current = true;
       const nextQuery = { ...router.query };
       if (channelId == null) {
         delete nextQuery.channel;
@@ -230,6 +307,11 @@ export default function ChatPage() {
         undefined,
         { shallow: true, scroll: false }
       );
+      
+      // Reset flag after a short delay to allow router to update
+      setTimeout(() => {
+        isUpdatingRouteRef.current = false;
+      }, 200);
     },
     [router]
   );
@@ -238,6 +320,8 @@ export default function ChatPage() {
 
   useEffect(() => {
     if (router.isReady) return;
+    // Only handle initial channel parameter on the chat page
+    if (router.pathname !== "/") return;
     if (typeof window === "undefined") return;
     const params = new URLSearchParams(window.location.search);
     const initialChannel = params.get("channel");
@@ -245,17 +329,82 @@ export default function ChatPage() {
     const normalized = normalizeChannelId(initialChannel);
     if (normalized == null) return;
     dispatch(setActiveChannel(normalized));
-  }, [router.isReady, normalizeChannelId, dispatch]);
+  }, [router.isReady, router.pathname, normalizeChannelId, dispatch]);
 
   useEffect(() => {
     if (!router.isReady) return;
+    // Only handle route parameter on the chat page
+    if (router.pathname !== "/") return;
+    // Prevent running if we're currently updating the route
+    if (isUpdatingRouteRef.current) return;
     if (routeChannelParam == null) return;
+    if (channelsLoading) return; // Wait for channels to load before checking membership
     const normalized = normalizeChannelId(routeChannelParam);
     if (normalized == null) return;
+    
+    // Only set channel from URL if user is actually a member of that channel
+    const isMember = channels.some((ch) => ch.id === normalized);
+    if (!isMember) {
+      // User is not a member of this channel - clear the URL parameter
+      // and switch to first available channel if any
+      if (channels.length > 0 && activeChannelId !== channels[0].id) {
+        dispatch(setActiveChannel(channels[0].id));
+      } else {
+        updateRouteChannel(null);
+      }
+      return;
+    }
+    
     if (activeChannelId == null || String(activeChannelId) !== String(normalized)) {
       dispatch(setActiveChannel(normalized));
     }
-  }, [router.isReady, routeChannelParam, normalizeChannelId, dispatch, activeChannelId]);
+  }, [router.isReady, router.pathname, routeChannelParam, normalizeChannelId, dispatch, activeChannelId, channels, channelsLoading, updateRouteChannel]);
+
+  // Update URL when active channel changes (but only if not already in sync with route)
+  // This effect is more conservative to prevent loops
+  useEffect(() => {
+    if (!router.isReady) return;
+    // Only update URL on the chat page
+    if (router.pathname !== "/") return;
+    // Prevent running if we're currently updating the route
+    if (isUpdatingRouteRef.current) return;
+    // Don't run if channels are still loading
+    if (channelsLoading) return;
+    
+    const routeChannel = normalizeChannelId(routeChannelParam);
+    
+    // If activeChannelId is null and route has a param, clear it
+    if (activeChannelId == null) {
+      if (routeChannelParam != null) {
+        updateRouteChannel(null);
+      }
+      return;
+    }
+    
+    // If route parameter matches active channel, we're already in sync
+    if (routeChannel != null && String(routeChannel) === String(activeChannelId)) {
+      return;
+    }
+    
+    // Only update URL if:
+    // 1. Route parameter doesn't match active channel
+    // 2. User is a member of the active channel
+    // 3. We're not currently updating the route
+    const isMember = channels.some((ch) => ch.id === activeChannelId);
+    if (isMember && routeChannel !== activeChannelId) {
+      // Use a small delay to debounce and prevent rapid updates
+      const timeoutId = setTimeout(() => {
+        if (!isUpdatingRouteRef.current) {
+          updateRouteChannel(activeChannelId);
+        }
+      }, 50);
+      
+      return () => clearTimeout(timeoutId);
+    } else if (!isMember && routeChannelParam != null) {
+      // User is not a member - clear URL
+      updateRouteChannel(null);
+    }
+  }, [router.isReady, router.pathname, activeChannelId, channels, channelsLoading, routeChannelParam, normalizeChannelId, updateRouteChannel]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -347,13 +496,40 @@ export default function ChatPage() {
 
   const notificationActions = useNotificationActions(notifications, notificationPreferences);
   const {
-    showNotifications,
-    handleToggleNotifications,
+    showNotifications: showNotificationsRaw,
+    handleToggleNotifications: handleToggleNotificationsRaw,
     handleNotificationSelect,
     handleNotificationRemove,
     handleMarkAllNotificationsReadClick,
     playNotificationSound,
   } = notificationActions;
+
+  const showNotifications = showNotificationsRaw;
+
+  const handleCallHistoryRefresh = useCallback(() => {
+    if (token) {
+      dispatch(fetchCallHistory({ token }));
+    }
+  }, [dispatch, token]);
+
+  const handleCallUser = useCallback((user, callType = "video") => {
+    // Implementation would depend on how you want to initiate calls to specific users
+    console.log("Call user:", user, callType);
+    // You might want to create a DM channel first, then start a call
+  }, []);
+
+  const handleRemoveCallFromHistory = useCallback((callId) => {
+    dispatch(removeCallFromHistory(callId));
+    // Also remove from database
+    if (token) {
+      fetch(`/api/call-history?callId=${callId}`, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      }).catch(console.error);
+    }
+  }, [dispatch, token]);
 
   const {
     selectedFile,
@@ -621,11 +797,12 @@ export default function ChatPage() {
     playNotificationSound,
     setTypingUsers,
     socketRef,
+    tokenRef,
   });
 
   const {
     activeThreadId,
-    setActiveThreadId,
+    setActiveThreadId: setActiveThreadIdRaw,
     threadDraft,
     setThreadDraft,
     openThread,
@@ -687,7 +864,7 @@ export default function ChatPage() {
     cancelEdit,
     error: messageActionError,
     errorId: messageActionErrorId,
-  } = useMessageActions(token, socketRef, activeThreadId, setActiveThreadId, setThreadDraft);
+  } = useMessageActions(token, socketRef, activeThreadId, setActiveThreadIdRaw, setThreadDraft);
 
   const { toggleReaction } = useMessageReactions(socketRef, token);
 
@@ -815,8 +992,9 @@ export default function ChatPage() {
   const isDirectMessageChannel = activeChannelMetadata?.type === "dm";
   const ownerCount = activeMembers.filter((member) => member.role === "owner").length;
   const isCurrentUserOwner = activeMembers.some((member) => member.role === "owner" && member.id === user?.id);
-  const canLeaveChannel = !isCurrentUserOwner || ownerCount > 1;
-  const canEditChannel = !isDirectMessageChannel && ["owner", "moderator"].includes(activeChannel?.role);
+  // Owners can always leave (ownership will be automatically transferred if they're the last owner)
+  const canLeaveChannel = true;
+  const canEditChannel = !isDirectMessageChannel && activeChannel?.role === "owner";
   const canManageMembers = !isDirectMessageChannel && activeChannel?.role === "owner";
 
   const channelForm = useChannelForm(token, selectedMemberIds);
@@ -838,6 +1016,7 @@ export default function ChatPage() {
     onToggleMember: toggleChannelMember,
   } = channelForm;
 
+
   const {
     showChannelSettings,
     openSettings,
@@ -858,6 +1037,122 @@ export default function ChatPage() {
     onAddMembers,
     onToggleSelected: toggleSettingsSelected,
   } = channelSettings;
+
+  // Helper function to manage panel limit (max 2 panels at a time)
+  // Priority order (lowest to highest - lower priority gets closed first):
+  // 1. Thread (lowest)
+  // 2. Room Booking
+  // 3. Call History
+  // 4. Notifications
+  // 5. Settings
+  // 6. Profile (highest)
+  const managePanelLimit = useCallback((panelToOpen) => {
+    const openPanels = {
+      thread: Boolean(activeThreadId),
+      roomBooking: showRoomBooking,
+      callHistory: showCallHistory,
+      notifications: showNotifications,
+      settings: showChannelSettings,
+      profile: showProfileSidebar,
+    };
+    
+    const openCount = Object.values(openPanels).filter(Boolean).length;
+    
+    // If opening this panel would exceed 2, close the lowest priority panel
+    if (openCount >= 2 && !openPanels[panelToOpen]) {
+      // Priority order: thread < roomBooking < callHistory < notifications < settings < profile
+      const priorityOrder = ['thread', 'roomBooking', 'callHistory', 'notifications', 'settings', 'profile'];
+      
+      // Find the lowest priority open panel (excluding the one we're trying to open)
+      for (const panel of priorityOrder) {
+        if (openPanels[panel] && panel !== panelToOpen) {
+          // Close this panel
+          switch (panel) {
+            case 'thread':
+              closeThread();
+              break;
+            case 'roomBooking':
+              setShowRoomBooking(false);
+              break;
+            case 'callHistory':
+              setShowCallHistory(false);
+              break;
+            case 'notifications':
+              handleToggleNotificationsRaw();
+              break;
+            case 'settings':
+              closeSettings();
+              break;
+            case 'profile':
+              setShowProfileSidebar(false);
+              break;
+          }
+          break;
+        }
+      }
+    }
+  }, [activeThreadId, showRoomBooking, showCallHistory, showNotifications, showChannelSettings, showProfileSidebar, closeThread, handleToggleNotificationsRaw, closeSettings]);
+
+  // Wrapper for notifications toggle with panel limit
+  const handleToggleNotifications = useCallback(() => {
+    if (!showNotificationsRaw) {
+      // Opening - check limit
+      managePanelLimit('notifications');
+    }
+    handleToggleNotificationsRaw();
+  }, [showNotificationsRaw, handleToggleNotificationsRaw, managePanelLimit]);
+
+  // Wrapper for openSettings that respects panel limit
+  const openSettingsWithLimit = useCallback(() => {
+    if (!showChannelSettings) {
+      managePanelLimit('settings');
+    }
+    openSettings();
+  }, [managePanelLimit, openSettings, showChannelSettings]);
+  
+  // Wrapper for opening room booking with panel limit
+  const handleOpenRoomBooking = useCallback(() => {
+    if (!showRoomBooking) {
+      managePanelLimit('roomBooking');
+    }
+    setShowRoomBooking(true);
+  }, [managePanelLimit, showRoomBooking]);
+
+  // Wrapper for opening profile sidebar with panel limit
+  const handleOpenProfile = useCallback(() => {
+    if (!showProfileSidebar) {
+      managePanelLimit('profile');
+    }
+    setShowProfileSidebar(true);
+  }, [managePanelLimit, showProfileSidebar]);
+  
+  // Wrapper for opening thread with panel limit
+  const handleOpenThread = useCallback((message) => {
+    if (!activeThreadId) {
+      managePanelLimit('thread');
+    }
+    openThread(message);
+  }, [managePanelLimit, activeThreadId, openThread]);
+
+  // Wrapper for setActiveThreadId with panel limit (defined after managePanelLimit)
+  const setActiveThreadId = useCallback((threadId) => {
+    if (threadId && !activeThreadId) {
+      // Opening a thread - check limit
+      managePanelLimit('thread');
+    }
+    setActiveThreadIdRaw(threadId);
+  }, [activeThreadId, managePanelLimit, setActiveThreadIdRaw]);
+
+  // Call history handlers (defined after managePanelLimit)
+  const handleToggleCallHistory = useCallback(() => {
+    setShowCallHistory((prev) => {
+      if (!prev) {
+        // Opening - check limit
+        managePanelLimit('callHistory');
+      }
+      return !prev;
+    });
+  }, [managePanelLimit]);
 
 const settingsSelectedMembersDisplay = useMemo(
   () =>
@@ -956,19 +1251,87 @@ const settingsSelectedMembersDisplay = useMemo(
           dispatch(markChannelAsRead(activeChannelId));
           // Also mark all notifications for this channel as read
           dispatch(markNotificationsByChannel(activeChannelId));
+          
+          // Mark all messages in the channel as read (for WhatsApp-style read receipts)
+          const unreadMessageIds = messages
+            .filter((msg) => {
+              // Only mark messages that are not from the current user and haven't been read by current user
+              const isOwnMessage = msg.user_id === user?.id;
+              const readBy = msg.readBy || [];
+              const isReadByCurrentUser = user?.id && readBy.includes(user.id);
+              return !isOwnMessage && !isReadByCurrentUser && msg.id;
+            })
+            .map((msg) => msg.id)
+            .filter(Boolean);
+          
+          if (unreadMessageIds.length > 0 && token && user?.id) {
+            dispatch(
+              markMessagesAsRead({
+                token,
+                channelId: activeChannelId,
+                messageIds: unreadMessageIds,
+                currentUserId: user.id,
+              })
+            );
+          }
+          
           markedAsReadRef.current.add(loadKey);
         }, 1000); // Delay to ensure divider shows before marking as read
         
         return () => clearTimeout(timer);
       }
     }
-  }, [dispatch, activeChannelId, loadedChannels, unreadCountsByChannel, lastReadTimestampByChannel, messagesByChannel]);
+  }, [dispatch, activeChannelId, loadedChannels, unreadCountsByChannel, lastReadTimestampByChannel, messagesByChannel, user, token]);
   
   // Clear tracking when channel changes
   useEffect(() => {
     initializedReadTimestampRef.current.clear();
     markedAsReadRef.current.clear();
   }, [activeChannelId]);
+
+  // Mark messages as delivered when recipient comes online
+  useEffect(() => {
+    if (!activeChannelId || !user?.id) return;
+    
+    const channelKey = String(activeChannelId);
+    const messages = messagesByChannel[channelKey] || [];
+    const channelMembers = membersByChannel[activeChannelId] || [];
+    
+    // Find messages that should be marked as delivered
+    const messagesToMark = messages
+      .filter((msg) => {
+        // Only own messages
+        const isOwnMsg = msg.user_id === user.id;
+        if (!isOwnMsg) return false;
+        
+        // Not already marked as delivered
+        if (msg.wasDelivered) return false;
+        
+        // Not read yet
+        const readBy = msg.readBy || [];
+        const recipients = channelMembers
+          .map((m) => m.id)
+          .filter((memberId) => memberId !== msg.user_id);
+        const isRead = recipients.length > 0 && recipients.every((recipientId) => readBy.includes(recipientId));
+        if (isRead) return false;
+        
+        // Recipient is currently online
+        const anyRecipientOnline = recipients.some((recipientId) =>
+          onlineUserIds.includes(recipientId)
+        );
+        
+        return anyRecipientOnline && msg.id;
+      })
+      .map((msg) => msg.id)
+      .filter(Boolean);
+    
+    if (messagesToMark.length > 0) {
+      dispatch(markMessageAsDelivered({
+        channelId: activeChannelId,
+        messageIds: messagesToMark,
+      }));
+    }
+  }, [activeChannelId, messagesByChannel, membersByChannel, onlineUserIds, user?.id, dispatch]);
 
   useEffect(() => {
     if (!showChannelForm || !token) return;
@@ -1530,11 +1893,51 @@ const settingsSelectedMembersDisplay = useMemo(
   );
 
   const renderMessageProps = useCallback(
-    (msg) => ({
-      isOwn: msg.user_id != null ? msg.user_id === user?.id : msg.username === user?.username,
+    (msg) => {
+      // Determine recipients and read status for WhatsApp-style ticks
+      const isOwn = msg.user_id != null ? msg.user_id === user?.id : msg.username === user?.username;
+      let hasRecipientOnline = false;
+      let isRead = false;
+
+      if (isOwn && activeChannelId) {
+        // Get channel members (recipients)
+        const channelMembers = membersByChannel[activeChannelId] || [];
+        const recipients = channelMembers
+          .map((m) => m.id)
+          .filter((memberId) => memberId !== msg.user_id);
+
+        if (recipients.length > 0) {
+          // Check if all recipients have read the message
+          const readBy = msg.readBy || [];
+          isRead = recipients.every((recipientId) => readBy.includes(recipientId));
+
+          // For delivered status (two ticks):
+          // Once a message shows two ticks, it should NEVER go back to one tick
+          // Message is considered "delivered" (show two ticks) if:
+          // 1. It has been read (definitely delivered - stays two ticks forever, colored)
+          // 2. It was previously delivered (wasDelivered flag is true)
+          // 3. Any recipient is currently online (delivered now - show two ticks)
+          
+          const anyRecipientOnline = recipients.some((recipientId) =>
+            onlineUserIds.includes(recipientId)
+          );
+          
+          // Check if message was ever delivered (showed 2 ticks before)
+          const wasDelivered = msg.wasDelivered === true;
+          
+          // Message is delivered (show two ticks) if:
+          // - It has been read (always show two ticks, colored when all read)
+          // - It was previously delivered (wasDelivered flag)
+          // - Recipient is currently online (show two light ticks)
+          hasRecipientOnline = isRead || wasDelivered || anyRecipientOnline;
+        }
+      }
+
+      return {
+        isOwn,
       onEdit: () => handleStartEdit(msg),
       onDelete: () => deleteMsg(msg),
-      onThreadOpen: () => openThread(msg),
+        onThreadOpen: () => handleOpenThread(msg),
       isEditing: editingMessageId === msg.id,
       editingText,
       onEditChange: setEditingText,
@@ -1555,6 +1958,8 @@ const settingsSelectedMembersDisplay = useMemo(
       onToggleReaction: (messageId, emoji) => toggleReaction(messageId, emoji, activeChannelId),
       currentUserId: user?.id,
       channelId: activeChannelId,
+        hasRecipientOnline,
+        isRead,
       editAttachmentProps: {
         mode: editingAttachmentMode,
         initialAttachment: editingInitialAttachment,
@@ -1575,7 +1980,8 @@ const settingsSelectedMembersDisplay = useMemo(
         onRestoreExisting: handleRestoreExistingAttachment,
       },
       editFileInputRef,
-    }),
+      };
+    },
     [
       user?.id,
       user?.username,
@@ -1614,6 +2020,7 @@ const settingsSelectedMembersDisplay = useMemo(
       handleRestoreExistingAttachment,
       toggleReaction,
       activeChannelId,
+      membersByChannel,
     ]
   );
 
@@ -1659,8 +2066,9 @@ const settingsSelectedMembersDisplay = useMemo(
         theme={theme}
         onToggleTheme={toggleTheme}
         user={user}
-        onOpenSettings={openSettings}
-        onOpenProfile={() => setShowProfileSidebar(true)}
+        onOpenSettings={openSettingsWithLimit}
+        onOpenProfile={handleOpenProfile}
+        onOpenRoomBooking={handleOpenRoomBooking}
         onLogout={() => {
           dispatch(logout());
           dispatch(clearMessages());
@@ -1680,6 +2088,8 @@ const settingsSelectedMembersDisplay = useMemo(
         unreadNotifications={unreadNotificationCount}
         onNotificationClick={handleToggleNotifications}
         notificationAnchorRef={notificationButtonRef}
+        onCallHistoryClick={handleToggleCallHistory}
+        callHistoryAnchorRef={callHistoryButtonRef}
       />
 
       <MessageList
@@ -1724,11 +2134,39 @@ const settingsSelectedMembersDisplay = useMemo(
     </>
   );
 
+  // Calculate panel positions for side-by-side display
+  // Order from right to left: Profile > Settings > Notifications > Call History > Room Booking > Thread
+  const panelOrder = {
+    profile: showProfileSidebar,
+    settings: showChannelSettings,
+    notifications: showNotifications,
+    callHistory: showCallHistory,
+    roomBooking: showRoomBooking,
+    thread: Boolean(activeThreadId),
+  };
+  
+  // Calculate position index for each panel (0 = rightmost, 1 = second from right, etc.)
+  const getPanelPosition = (panelName) => {
+    const order = ['profile', 'settings', 'notifications', 'callHistory', 'roomBooking', 'thread'];
+    const openPanels = order.filter(name => panelOrder[name]);
+    const index = openPanels.indexOf(panelName);
+    return index >= 0 ? index : -1;
+  };
+  
+  const threadPosition = getPanelPosition('thread');
+  const roomBookingPosition = getPanelPosition('roomBooking');
+  const notificationsPosition = getPanelPosition('notifications');
+  const callHistoryPosition = getPanelPosition('callHistory');
+  const settingsPosition = getPanelPosition('settings');
+  const profilePosition = getPanelPosition('profile');
+
   return (
     <ChatLayout
       theme={theme}
       hasThreadPanel={Boolean(activeThreadId)}
       hasNotificationPanel={showNotifications}
+      hasCallHistoryPanel={showCallHistory}
+      hasRoomBookingPanel={showRoomBooking}
       hasSettingsPanel={showChannelSettings}
       hasProfilePanel={showProfileSidebar}
       sidebar={
@@ -1807,6 +2245,20 @@ const settingsSelectedMembersDisplay = useMemo(
         onPreferenceToggle={handleNotificationPreferenceToggle}
         onResetPreferences={handleResetNotificationPreferences}
         isOpen={showNotifications}
+        panelPosition={notificationsPosition}
+      />
+
+      <CallHistoryDropdown
+        calls={callHistory}
+        isLoading={callHistoryLoading}
+        error={callHistoryError}
+        isOpen={showCallHistory}
+        onClose={handleToggleCallHistory}
+        onCallUser={handleCallUser}
+        onRemoveCall={handleRemoveCallFromHistory}
+        onRefresh={handleCallHistoryRefresh}
+        currentUserId={user?.id}
+        panelPosition={callHistoryPosition}
       />
 
       <AttachmentPreview file={selectedFile} previewUrl={previewUrl} onRemove={handleRemoveAttachment} />
@@ -1870,6 +2322,7 @@ const settingsSelectedMembersDisplay = useMemo(
           onMentionClick={handleMentionNavigate}
           onToggleReaction={(messageId, emoji) => toggleReaction(messageId, emoji, activeChannelId)}
           channelId={activeChannelId}
+          panelPosition={threadPosition}
           attachmentControls={{
             onOpenFilePicker: () => threadFileInputRef.current?.click(),
             onOpenCamera: openThreadCamera,
@@ -1941,6 +2394,7 @@ const settingsSelectedMembersDisplay = useMemo(
         updatingChannel={false}
         onClearChat={handleClearChat}
         isClearingChat={isClearingChat}
+        panelPosition={settingsPosition}
       />
 
       <ProfileSidebar
@@ -1954,8 +2408,15 @@ const settingsSelectedMembersDisplay = useMemo(
           dispatch(clearChannelError());
           setIsMobileSidebarOpen(false);
         }}
-        onOpenSettings={openSettings}
+        onOpenSettings={openSettingsWithLimit}
         onlineUserIds={onlineUserIds}
+        panelPosition={profilePosition}
+      />
+
+      <RoomBookingSidebar
+        isOpen={showRoomBooking}
+        onClose={() => setShowRoomBooking(false)}
+        panelPosition={roomBookingPosition}
       />
     </ChatLayout>
   );

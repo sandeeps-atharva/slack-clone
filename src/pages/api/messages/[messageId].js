@@ -36,10 +36,14 @@ export default async function handler(req, res) {
   if (!Number.isInteger(messageId) || messageId <= 0) {
     return res.status(400).json({ error: "Invalid message id" });
   }
+  console.log("messageId",messageId);
+  
 
   let message;
   try {
     message = await getMessageWithMembership(messageId, user.id);
+    console.log("message", message);
+    
   } catch (error) {
     console.error("Fetch message error:", error);
     return res.status(500).json({ error: "Failed to load message" });

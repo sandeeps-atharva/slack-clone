@@ -7,6 +7,9 @@ import channelSlice from "@/store/slices/channelSlice";
 import callSlice from "@/store/slices/callSlice";
 import onlineStatusSlice from "@/store/slices/onlineStatusSlice";
 import notificationSlice from "@/store/slices/notificationSlice";
+import callHistorySlice from "@/store/slices/callHistorySlice";
+import roomSlice from "@/store/slices/roomSlice";
+import bookingSlice from "@/store/slices/bookingSlice";
 
 export const store = configureStore({
   reducer: {
@@ -17,6 +20,9 @@ export const store = configureStore({
     call: callSlice,
     onlineStatus: onlineStatusSlice,
     notifications: notificationSlice,
+    callHistory: callHistorySlice,
+    rooms: roomSlice,
+    bookings: bookingSlice,
   },
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({

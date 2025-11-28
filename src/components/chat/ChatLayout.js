@@ -1,11 +1,17 @@
 import React from "react";
 
-export default function ChatLayout({ sidebar, main, theme, children, hasThreadPanel, hasNotificationPanel, hasSettingsPanel, hasProfilePanel }) {
-  // Calculate right margin based on which panels are open
-  // Priority: Profile > Settings > Notifications > Thread (highest z-index wins)
+export default function ChatLayout({ sidebar, main, theme, children, hasThreadPanel, hasNotificationPanel, hasRoomBookingPanel, hasSettingsPanel, hasProfilePanel, hasCallHistoryPanel }) {
+  // Calculate right margin based on how many panels are open
+  // Panels stack from right to left: Profile > Settings > Notifications > Call History > Room Booking > Thread
+  // Each panel is 28rem (448px) wide
   // On mobile, panels are full-width overlays, so no margin needed
-  const hasAnyPanel = hasThreadPanel || hasNotificationPanel || hasSettingsPanel || hasProfilePanel;
-  const rightMargin = hasAnyPanel ? "md:mr-[28rem]" : "";
+  
+  const panelCount = [hasThreadPanel, hasNotificationPanel, hasCallHistoryPanel, hasRoomBookingPanel, hasSettingsPanel, hasProfilePanel].filter(Boolean).length;
+  
+  // Calculate right margin - use Tailwind's arbitrary values
+  // Each panel is 28rem wide, so margin = panelCount * 28rem
+  const marginRem = panelCount * 28;
+  const rightMargin = panelCount > 0 ? `md:mr-[${marginRem}rem]` : "";
 
   return (
     <div

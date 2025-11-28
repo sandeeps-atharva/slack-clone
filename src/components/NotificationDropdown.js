@@ -60,7 +60,11 @@ export default function NotificationDropdown({
   onPreferenceToggle,
   onResetPreferences,
   isOpen,
+  panelPosition = 0, // Position from right (0 = rightmost)
 }) {
+  // Calculate right offset: each panel is 28rem wide, position 0 is rightmost
+  const rightOffset = panelPosition * 28; // in rem
+  const rightStyle = panelPosition === 0 ? {} : { right: `${rightOffset}rem` };
   useEffect(() => {
     const handleEscape = (event) => {
       if (event.key === "Escape" && isOpen) {
@@ -97,7 +101,10 @@ export default function NotificationDropdown({
         aria-hidden="true"
       />
       {/* Sidebar panel */}
-      <div className="fixed right-0 top-0 bottom-0 z-40 w-full md:max-w-md bg-white dark:bg-gray-900 border-l border-gray-200 dark:border-gray-800 shadow-xl flex flex-col h-full">
+      <div 
+        className="fixed right-0 top-0 bottom-0 z-40 w-full md:max-w-md bg-white dark:bg-gray-900 border-l border-gray-200 dark:border-gray-800 shadow-xl flex flex-col h-full"
+        style={rightStyle}
+      >
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-800">
         <div className="flex items-center gap-2 text-sm font-semibold text-gray-700 dark:text-gray-200">
           <Bell className="w-4 h-4 text-purple-500" />

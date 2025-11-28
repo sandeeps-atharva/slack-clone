@@ -18,6 +18,7 @@ export default function ChannelSettingsModal({
   canLeaveChannel,
   onLeave,
   isLeaving,
+  panelPosition = 0, // Position from right (0 = rightmost)
   errors,
   members,
   membersLoading,
@@ -40,6 +41,10 @@ export default function ChannelSettingsModal({
 }) {
   if (!isOpen || !channel) return null;
 
+  // Calculate right offset: each panel is 28rem wide, position 0 is rightmost
+  const rightOffset = panelPosition * 28; // in rem
+  const rightStyle = panelPosition === 0 ? {} : { right: `${rightOffset}rem` };
+
   const combinedError =
     errors.filter(Boolean).length > 0 ? errors.filter(Boolean)[0] : null;
 
@@ -54,7 +59,10 @@ export default function ChannelSettingsModal({
         aria-hidden="true"
       />
       {/* Sidebar panel */}
-      <div className="fixed right-0 top-0 bottom-0 z-50 w-full md:max-w-md bg-white dark:bg-gray-900 border-l border-gray-200 dark:border-gray-800 shadow-xl flex flex-col h-full">
+      <div 
+        className="fixed right-0 top-0 bottom-0 z-50 w-full md:max-w-md bg-white dark:bg-gray-900 border-l border-gray-200 dark:border-gray-800 shadow-xl flex flex-col h-full"
+        style={rightStyle}
+      >
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-800 flex-shrink-0">
         <div>
           <h2 className="text-sm font-semibold text-gray-800 dark:text-gray-100">Channel settings</h2>
@@ -76,6 +84,7 @@ export default function ChannelSettingsModal({
         )}
 
         {!isDirectMessageChannel ? (
+          canEditChannel ? (
           <form onSubmit={onSubmit} className="space-y-4">
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div>
@@ -86,7 +95,7 @@ export default function ChannelSettingsModal({
                   className="w-full rounded-lg border border-gray-300 dark:border-gray-700 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 dark:bg-gray-900 dark:text-gray-100 dark:placeholder-gray-500"
                   value={settingsName}
                   onChange={(e) => onChangeName(e.target.value)}
-                  disabled={!canEditChannel || updatingChannel}
+                    disabled={updatingChannel}
                 />
               </div>
               <div>
@@ -97,7 +106,7 @@ export default function ChannelSettingsModal({
                   className="w-full rounded-lg border border-gray-300 dark:border-gray-700 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 dark:bg-gray-900 dark:text-gray-100 dark:placeholder-gray-500"
                   value={settingsTopic}
                   onChange={(e) => onChangeTopic(e.target.value)}
-                  disabled={!canEditChannel || updatingChannel}
+                    disabled={updatingChannel}
                 />
               </div>
             </div>
@@ -106,7 +115,7 @@ export default function ChannelSettingsModal({
                 type="checkbox"
                 checked={settingsPrivate}
                 onChange={(e) => onChangePrivate(e.target.checked)}
-                disabled={!canEditPrivacy || updatingChannel}
+                  disabled={updatingChannel}
                 className="rounded border-gray-300 dark:border-gray-600 text-purple-600 focus:ring-purple-500"
               />
               Make channel private
@@ -128,6 +137,11 @@ export default function ChannelSettingsModal({
               </button>
             </div>
           </form>
+          ) : (
+            <div className="rounded-lg bg-gray-50 dark:bg-gray-800/60 px-3 py-2 text-sm text-gray-600 dark:text-gray-300">
+              Only channel owners can edit channel name and topic.
+            </div>
+          )
         ) : (
           <p className="rounded-lg bg-gray-50 dark:bg-gray-800/60 px-3 py-2 text-sm text-gray-600 dark:text-gray-300">
             Direct message details cannot be edited.
@@ -280,16 +294,11 @@ export default function ChannelSettingsModal({
                 </h4>
                 <button
                   onClick={onLeave}
-                  disabled={!canLeaveChannel || isLeaving}
+                  disabled={isLeaving}
                   className="w-full rounded-lg border border-gray-300 dark:border-gray-700 px-4 py-2 text-sm font-medium text-gray-600 dark:text-gray-200 hover:bg-gray-100 dark:hover-bg-gray-800 transition disabled:opacity-50"
                 >
                   {isLeaving ? "Leaving..." : "Leave channel"}
                 </button>
-                {!canLeaveChannel && (
-                  <p className="text-xs text-gray-500 dark:text-gray-400">
-                    Transfer ownership to another member before leaving this channel.
-                  </p>
-                )}
               </div>
             </>
           )}

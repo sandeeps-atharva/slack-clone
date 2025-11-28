@@ -1,4 +1,4 @@
-import { Menu, Settings } from "lucide-react";
+import { Menu, Settings, Phone, Calendar } from "lucide-react";
 import ChannelIcon from "./ChannelIcon";
 import ThemeToggle from "./ThemeToggle";
 import NotificationBell from "./NotificationBell";
@@ -27,7 +27,10 @@ export default function ChatHeader({
   unreadNotifications,
   onNotificationClick,
   notificationAnchorRef,
+  onCallHistoryClick,
+  callHistoryAnchorRef,
   onOpenProfile,
+  onOpenRoomBooking,
 }) {
   const displayName = channelName || "Select a channel";
   const topicText =
@@ -65,6 +68,23 @@ export default function ChatHeader({
             onClick={onNotificationClick}
             anchorRef={notificationAnchorRef}
           />
+          <button
+            onClick={onOpenRoomBooking}
+            className="p-1.5 sm:p-2 rounded-full border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 transition text-gray-700 dark:text-gray-200"
+            aria-label="Room bookings"
+            title="Room bookings"
+          >
+            <Calendar className="w-4 h-4 sm:w-5 sm:h-5" />
+          </button>
+          <button
+            ref={callHistoryAnchorRef}
+            onClick={onCallHistoryClick}
+            className="p-1.5 sm:p-2 rounded-full border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 transition text-gray-700 dark:text-gray-200"
+            aria-label="Call history"
+            title="Call history"
+          >
+            <Phone className="w-4 h-4 sm:w-5 sm:h-5" />
+          </button>
           <ThemeToggle theme={theme} onToggle={onToggleTheme} />
           <CallControlButtons
             isInCall={isInCall}

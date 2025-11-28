@@ -131,8 +131,11 @@ export default async function handler(req, res) {
     if (!emoji || typeof emoji !== "string" || emoji.trim().length === 0) {
       return res.status(400).json({ error: "emoji is required" });
     }
+console.log("emojiemoji" , emoji);
 
     const emojiValue = emoji.trim();
+    console.log("emojiValue",emojiValue);
+    
 
     try {
       // Check if reaction already exists

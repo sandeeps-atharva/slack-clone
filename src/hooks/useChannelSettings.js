@@ -56,10 +56,6 @@ export default function useChannelSettings(token, activeChannelId, canLeaveChann
 
   const handleLeave = useCallback(async () => {
     if (!activeChannelId || !token) return;
-    if (!canLeaveChannel) {
-      setError("Transfer ownership before leaving the channel");
-      return;
-    }
     const confirmed = window.confirm("Leave this channel?");
     if (!confirmed) return;
 
@@ -76,7 +72,7 @@ export default function useChannelSettings(token, activeChannelId, canLeaveChann
     } else if (leaveChannel.rejected.match(result)) {
       setError(result.payload || "Failed to leave channel");
     }
-  }, [activeChannelId, token, canLeaveChannel, dispatch]);
+  }, [activeChannelId, token, dispatch]);
 
   const handleRemoveMember = useCallback(async (memberId, username) => {
     if (!activeChannelId || !token) return;

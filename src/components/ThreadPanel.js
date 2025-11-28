@@ -249,10 +249,16 @@ export default function ThreadPanel({
   threadFileInputRef,
   onToggleReaction,
   channelId,
+  panelPosition = 0, // Position from right (0 = rightmost)
 }) {
   if (!isOpen || !rootMessage) {
     return null;
   }
+  
+  // Calculate right offset: each panel is 28rem wide, position 0 is rightmost
+  // Position 0 = right-0, position 1 = right-28rem, position 2 = right-56rem, etc.
+  const rightOffset = panelPosition * 28; // in rem
+  const rightStyle = panelPosition === 0 ? {} : { right: `${rightOffset}rem` };
 
   const hasAttachment = Boolean(attachmentState?.file);
   const canSendReply =
@@ -267,7 +273,10 @@ export default function ThreadPanel({
         aria-hidden="true"
       />
       {/* Sidebar panel */}
-      <div className="fixed right-0 top-0 bottom-0 z-30 w-full md:max-w-md bg-white dark:bg-gray-900 border-l border-gray-200 dark:border-gray-800 shadow-xl flex flex-col h-full">
+      <div 
+        className="fixed right-0 top-0 bottom-0 z-30 w-full md:max-w-md bg-white dark:bg-gray-900 border-l border-gray-200 dark:border-gray-800 shadow-xl flex flex-col h-full"
+        style={rightStyle}
+      >
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-800">
         <div>
           <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-100">Thread</h3>

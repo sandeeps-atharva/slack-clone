@@ -96,6 +96,32 @@ export const updateMessage = createAsyncThunk(
   }
 );
 
+// Async thunk to mark messages as read
+export const markMessagesAsRead = createAsyncThunk(
+  "chat/markMessagesAsRead",
+  async ({ token, channelId, messageIds, currentUserId }, { rejectWithValue }) => {
+    try {
+      const res = await fetch("/api/messages/mark-read", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ messageIds, channelId }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        return { channelId, messageIds, markedCount: data.markedCount, currentUserId };
+      }
+      const errorData = await res.json().catch(() => ({}));
+      return rejectWithValue(errorData.error || "Failed to mark messages as read");
+    } catch (error) {
+      return rejectWithValue("Network error while marking messages as read");
+    }
+  }
+);
+
 export const clearChat = createAsyncThunk(
   "chat/clearChat",
   async ({ token, channelId }, { rejectWithValue }) => {
@@ -168,6 +194,8 @@ const upsertMessage = (state, message, status = "sent") => {
     status: status || message.status || "sent",
     mentions: Array.isArray(message.mentions) ? message.mentions : [],
     reactions: Array.isArray(message.reactions) ? message.reactions : [],
+    // Preserve wasDelivered flag if it exists
+    wasDelivered: message.wasDelivered !== undefined ? message.wasDelivered : false,
   };
 
   const clientId = normalizedMessage.clientId;
@@ -310,6 +338,42 @@ const chatSlice = createSlice({
       if (!resolvedChannelId || id == null) return;
       removeMessageFromChannel(state, resolvedChannelId, id);
     },
+    updateMessageReadStatus: (state, action) => {
+      const { channelId, messageIds, readBy } = action.payload;
+      const resolvedChannelId = resolveChannelId(channelId);
+      if (!resolvedChannelId) return;
+      const channelKey = String(resolvedChannelId);
+      const messages = state.messagesByChannel[channelKey] || [];
+
+      // Update read status for messages
+      messages.forEach((msg) => {
+        if (messageIds.includes(msg.id)) {
+          if (!msg.readBy) {
+            msg.readBy = [];
+          }
+          // Add user to readBy if not already present
+          if (readBy && !msg.readBy.includes(readBy)) {
+            msg.readBy = [...msg.readBy, readBy];
+          }
+          // Mark as delivered since it was read
+          msg.wasDelivered = true;
+        }
+      });
+    },
+    markMessageAsDelivered: (state, action) => {
+      const { channelId, messageIds } = action.payload;
+      const resolvedChannelId = resolveChannelId(channelId);
+      if (!resolvedChannelId) return;
+      const channelKey = String(resolvedChannelId);
+      const messages = state.messagesByChannel[channelKey] || [];
+
+      // Mark messages as delivered (they showed 2 ticks)
+      messages.forEach((msg) => {
+        if (messageIds.includes(msg.id)) {
+          msg.wasDelivered = true;
+        }
+      });
+    },
     updateMessageReaction: (state, action) => {
       const { messageId, channelId, emoji, action: reactionAction, user, currentUserId } = action.payload;
       const resolvedChannelId = resolveChannelId(channelId);
@@ -427,6 +491,10 @@ const chatSlice = createSlice({
           channel_id: msg.channel_id || channelId,
           status: msg.status || "sent",
           reactions: Array.isArray(msg.reactions) ? msg.reactions : [],
+          readBy: Array.isArray(msg.readBy) ? msg.readBy : [],
+          allRecipientsRead: msg.allRecipientsRead || false,
+          // If message has readBy entries, it was delivered
+          wasDelivered: (Array.isArray(msg.readBy) && msg.readBy.length > 0) || msg.wasDelivered || false,
         }));
       })
       .addCase(fetchMessages.rejected, (state, action) => {
@@ -501,6 +569,28 @@ const chatSlice = createSlice({
         // Mark channel as needing reload
         delete state.loadedChannels[channelId];
       })
+      .addCase(markMessagesAsRead.fulfilled, (state, action) => {
+        const channelId = resolveChannelId(action.payload.channelId);
+        if (!channelId) return;
+        const channelKey = String(channelId);
+        const messages = state.messagesByChannel[channelKey] || [];
+        const { messageIds, currentUserId } = action.payload;
+
+        // Update read status for messages
+        messages.forEach((msg) => {
+          if (messageIds.includes(msg.id)) {
+            if (!msg.readBy) {
+              msg.readBy = [];
+            }
+            // Add current user to readBy if not already present
+            if (currentUserId && !msg.readBy.includes(currentUserId)) {
+              msg.readBy = [...msg.readBy, currentUserId];
+            }
+            // Mark as delivered since it was read
+            msg.wasDelivered = true;
+          }
+        });
+      })
       .addCase(clearChat.rejected, (state, action) => {
         state.error = action.payload;
       })
@@ -523,10 +613,13 @@ export const {
   clearChatError,
   applyIncomingMessageUpdate,
   removeMessage,
+  updateMessageReadStatus,
+  markMessageAsDelivered,
   updateMessageReaction,
   markChannelAsRead,
   incrementUnreadCount,
   setChannelLastReadTimestamp,
 } = chatSlice.actions;
+
 export default chatSlice.reducer;
 

@@ -299,6 +299,71 @@ const channelSlice = createSlice({
     resetSelectedMembers: (state) => {
       state.selectedMemberIds = [];
     },
+    addChannel: (state, action) => {
+      const channel = action.payload;
+      if (!channel || !channel.id) return;
+      
+      // Sanitize channel data to prevent DM misidentification
+      const sanitizedChannel = {
+        ...channel,
+        name: channel.name || "",
+        topic: channel.topic != null ? String(channel.topic) : "",
+        is_private: channel.is_private != null ? Number(channel.is_private) : 0,
+      };
+      
+      // If channel has a name AND is NOT private, ensure topic doesn't have DM metadata
+      // For private channels (DMs), we need to keep the topic metadata to identify participants
+      if (sanitizedChannel.name && sanitizedChannel.name.trim() !== "" && sanitizedChannel.is_private === 0) {
+        try {
+          if (sanitizedChannel.topic) {
+            const parsed = JSON.parse(sanitizedChannel.topic);
+            if (parsed && parsed.type === "dm") {
+              // Topic incorrectly has DM metadata for a non-private channel - clear it
+              sanitizedChannel.topic = "";
+            }
+          }
+        } catch (e) {
+          // Topic is not valid JSON, which is fine for regular channels
+        }
+      }
+      
+      // Check if channel already exists
+      const exists = state.channels.some((c) => c.id === sanitizedChannel.id);
+      if (!exists) {
+        state.channels.push(sanitizedChannel);
+      } else {
+        // Update existing channel with sanitized data
+        const index = state.channels.findIndex((c) => c.id === sanitizedChannel.id);
+        if (index !== -1) {
+          state.channels[index] = sanitizedChannel;
+        }
+      }
+    },
+    removeMemberFromChannel: (state, action) => {
+      const { channelId, userId } = action.payload;
+      if (!channelId || !userId) return;
+      
+      const members = state.membersByChannel[channelId];
+      if (Array.isArray(members)) {
+        state.membersByChannel[channelId] = members.filter((member) => member.id !== userId);
+      }
+    },
+    updateChannelFromSocket: (state, action) => {
+      const channel = action.payload;
+      if (!channel || !channel.id) return;
+      
+      const index = state.channels.findIndex((c) => c.id === channel.id);
+      if (index !== -1) {
+        // Update existing channel
+        state.channels[index] = {
+          ...state.channels[index],
+          ...channel,
+        };
+      } else {
+        // Channel doesn't exist yet, add it
+        state.channels.push(channel);
+      }
+    },
   },
   extraReducers: (builder) => {
     builder
@@ -468,6 +533,9 @@ export const {
   addSelectedMember,
   removeSelectedMember,
   resetSelectedMembers,
+  addChannel,
+  removeMemberFromChannel,
+  updateChannelFromSocket,
 } = channelSlice.actions;
 
 export default channelSlice.reducer;

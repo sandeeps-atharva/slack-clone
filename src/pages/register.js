@@ -3,13 +3,16 @@ import { useDispatch, useSelector } from "react-redux";
 import { useRouter } from "next/router";
 import Link from "next/link";
 import { registerUser, clearError } from "../store/slices/authSlice";
-import { updateFormData, resetFormData } from "../store/slices/uiSlice";
+import { updateFormData, resetFormData, setValidationError, clearValidationError, clearAllValidationErrors } from "../store/slices/uiSlice";
+import { validateUsername, validateEmail, validatePassword, validatePasswordConfirm } from "../utils/validation";
 
 export default function RegisterPage() {
   const dispatch = useDispatch();
   const router = useRouter();
   const { isLoading, error: authError, isAuthenticated } = useSelector((state) => state.auth);
-  const { formData } = useSelector((state) => state.ui);
+  const { formData, validationErrors } = useSelector((state) => state.ui);
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [touched, setTouched] = useState({ username: false, email: false, password: false, confirmPassword: false });
 
   useEffect(() => {
     // Redirect to home if already authenticated
@@ -22,10 +25,75 @@ export default function RegisterPage() {
     // Reset form data on mount
     dispatch(resetFormData());
     dispatch(clearError());
+    setConfirmPassword("");
   }, [dispatch]);
+
+  const handleBlur = (field) => {
+    setTouched({ ...touched, [field]: true });
+    let error = "";
+    if (field === "username") {
+      error = validateUsername(formData.username);
+    } else if (field === "email") {
+      error = validateEmail(formData.email);
+    } else if (field === "password") {
+      error = validatePassword(formData.password);
+    } else if (field === "confirmPassword") {
+      error = validatePasswordConfirm(formData.password, confirmPassword);
+    }
+    if (error) {
+      dispatch(setValidationError({ field, error }));
+    } else {
+      dispatch(clearValidationError(field));
+    }
+  };
+
+  const handleChange = (field, value) => {
+    if (field === "confirmPassword") {
+      setConfirmPassword(value);
+      // Clear error when user starts typing
+      if (touched.confirmPassword && validationErrors.password) {
+        dispatch(clearValidationError("password"));
+      }
+    } else {
+      dispatch(updateFormData({ [field]: value }));
+      // Clear error when user starts typing
+      if (touched[field] && validationErrors[field]) {
+        dispatch(clearValidationError(field));
+      }
+    }
+  };
+
+  const validateForm = () => {
+    const usernameError = validateUsername(formData.username);
+    const emailError = validateEmail(formData.email);
+    const passwordError = validatePassword(formData.password);
+    const confirmPasswordError = validatePasswordConfirm(formData.password, confirmPassword);
+
+    if (usernameError) {
+      dispatch(setValidationError({ field: "username", error: usernameError }));
+    }
+    if (emailError) {
+      dispatch(setValidationError({ field: "email", error: emailError }));
+    }
+    if (passwordError) {
+      dispatch(setValidationError({ field: "password", error: passwordError }));
+    }
+    if (confirmPasswordError) {
+      dispatch(setValidationError({ field: "password", error: confirmPasswordError }));
+    }
+
+    return !usernameError && !emailError && !passwordError && !confirmPasswordError;
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    dispatch(clearAllValidationErrors());
+    setTouched({ username: true, email: true, password: true, confirmPassword: true });
+
+    if (!validateForm()) {
+      return;
+    }
+
     const result = await dispatch(
       registerUser({
         username: formData.username,
@@ -58,31 +126,88 @@ export default function RegisterPage() {
         )}
 
         <form onSubmit={handleSubmit} className="space-y-3 sm:space-y-4">
-          <input
-            className="w-full px-4 sm:px-5 py-2.5 sm:py-3 border border-gray-300 dark:border-gray-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500 text-sm sm:text-base bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400"
-            placeholder="Username"
-            value={formData.username}
-            onChange={(e) => dispatch(updateFormData({ username: e.target.value }))}
-            required
-          />
+          <div>
+            <input
+              className={`w-full px-4 sm:px-5 py-2.5 sm:py-3 border rounded-xl focus:outline-none focus:ring-2 text-sm sm:text-base bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 ${
+                touched.username && validationErrors.username
+                  ? "border-red-500 focus:ring-red-500"
+                  : "border-gray-300 dark:border-gray-600 focus:ring-purple-500"
+              }`}
+              placeholder="Username"
+              value={formData.username}
+              onChange={(e) => handleChange("username", e.target.value)}
+              onBlur={() => handleBlur("username")}
+              required
+            />
+            {touched.username && validationErrors.username && (
+              <p className="mt-1 text-xs text-red-600 dark:text-red-400">
+                {validationErrors.username}
+              </p>
+            )}
+          </div>
 
-          <input
-            className="w-full px-4 sm:px-5 py-2.5 sm:py-3 border border-gray-300 dark:border-gray-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500 text-sm sm:text-base bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400"
-            placeholder="Email"
-            type="email"
-            value={formData.email}
-            onChange={(e) => dispatch(updateFormData({ email: e.target.value }))}
-            required
-          />
+          <div>
+            <input
+              className={`w-full px-4 sm:px-5 py-2.5 sm:py-3 border rounded-xl focus:outline-none focus:ring-2 text-sm sm:text-base bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 ${
+                touched.email && validationErrors.email
+                  ? "border-red-500 focus:ring-red-500"
+                  : "border-gray-300 dark:border-gray-600 focus:ring-purple-500"
+              }`}
+              placeholder="Email"
+              type="email"
+              value={formData.email}
+              onChange={(e) => handleChange("email", e.target.value)}
+              onBlur={() => handleBlur("email")}
+              required
+            />
+            {touched.email && validationErrors.email && (
+              <p className="mt-1 text-xs text-red-600 dark:text-red-400">
+                {validationErrors.email}
+              </p>
+            )}
+          </div>
 
-          <input
-            className="w-full px-4 sm:px-5 py-2.5 sm:py-3 border border-gray-300 dark:border-gray-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500 text-sm sm:text-base bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400"
-            placeholder="Password"
-            type="password"
-            value={formData.password}
-            onChange={(e) => dispatch(updateFormData({ password: e.target.value }))}
-            required
-          />
+          <div>
+            <input
+              className={`w-full px-4 sm:px-5 py-2.5 sm:py-3 border rounded-xl focus:outline-none focus:ring-2 text-sm sm:text-base bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 ${
+                touched.password && validationErrors.password
+                  ? "border-red-500 focus:ring-red-500"
+                  : "border-gray-300 dark:border-gray-600 focus:ring-purple-500"
+              }`}
+              placeholder="Password"
+              type="password"
+              value={formData.password}
+              onChange={(e) => handleChange("password", e.target.value)}
+              onBlur={() => handleBlur("password")}
+              required
+            />
+            {touched.password && validationErrors.password && (
+              <p className="mt-1 text-xs text-red-600 dark:text-red-400">
+                {validationErrors.password}
+              </p>
+            )}
+          </div>
+
+          <div>
+            <input
+              className={`w-full px-4 sm:px-5 py-2.5 sm:py-3 border rounded-xl focus:outline-none focus:ring-2 text-sm sm:text-base bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 ${
+                touched.confirmPassword && formData.password && formData.password !== confirmPassword
+                  ? "border-red-500 focus:ring-red-500"
+                  : "border-gray-300 dark:border-gray-600 focus:ring-purple-500"
+              }`}
+              placeholder="Confirm Password"
+              type="password"
+              value={confirmPassword}
+              onChange={(e) => handleChange("confirmPassword", e.target.value)}
+              onBlur={() => handleBlur("confirmPassword")}
+              required
+            />
+            {touched.confirmPassword && formData.password && formData.password !== confirmPassword && (
+              <p className="mt-1 text-xs text-red-600 dark:text-red-400">
+                Passwords do not match
+              </p>
+            )}
+          </div>
 
           <button
             type="submit"

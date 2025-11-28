@@ -96,6 +96,116 @@ export default async function handler(req, res) {
         [channelId, ...newIds]
       );
 
+      // Create system messages for each newly added member
+      try {
+        for (const newMember of newMembers) {
+          const systemMessage = `${newMember.username} was added by ${user.username}`;
+          
+          // Insert system message into database
+          const [messageResult] = await pool.execute(
+            `INSERT INTO messages
+                (user_id, username, message, message_type, channel_id)
+             VALUES (?, ?, ?, ?, ?)`,
+            [user.id, user.username, systemMessage, "member_added", channelId]
+          );
+
+          const messageId = messageResult.insertId;
+
+          // Fetch the complete message with timestamp
+          const [messageRows] = await pool.execute(
+            `SELECT id, user_id, username, message, message_type, channel_id, created_at
+             FROM messages WHERE id = ? LIMIT 1`,
+            [messageId]
+          );
+
+          if (messageRows.length > 0) {
+            const systemMsg = messageRows[0];
+            
+            // Broadcast the system message via socket
+            const io = res.socket.server.io;
+            if (io) {
+              io.emit("receive_message", {
+                ...systemMsg,
+                channel_id: channelId,
+                channelId: channelId,
+              });
+            }
+          }
+        }
+      } catch (messageError) {
+        console.error("Failed to create system message for member addition:", messageError);
+        // Don't fail the request if message creation fails
+      }
+
+      // Emit socket event to notify newly added members about the channel
+      try {
+        const io = res.socket.server.io;
+        if (io) {
+          // Fetch the channel data
+          const [channelRows] = await pool.execute(
+            "SELECT id, name, slug, topic, is_private FROM channels WHERE id = ? LIMIT 1",
+            [channelId]
+          );
+          
+          if (channelRows.length > 0) {
+            const channel = channelRows[0];
+            
+            // Ensure topic is a string (not null) to avoid parsing issues
+            // For regular channels (non-DM), ensure topic is empty string if null
+            // This prevents them from being misidentified as DMs
+            let topic = channel.topic;
+            if (topic == null) {
+              topic = "";
+            }
+            
+            // Validate: If channel has a name, it's a regular channel, not a DM
+            // Ensure topic doesn't contain DM metadata for regular channels
+            if (channel.name && channel.name.trim() !== "") {
+              // This is a regular channel - ensure topic doesn't have DM metadata
+              try {
+                const parsed = topic ? JSON.parse(topic) : null;
+                if (parsed && parsed.type === "dm") {
+                  // Topic incorrectly has DM metadata - clear it
+                  topic = "";
+                }
+              } catch (e) {
+                // Topic is not valid JSON, which is fine for regular channels
+                // Keep it as is (might be plain text)
+              }
+            }
+            
+            // Get the role for each newly added member
+            const [memberRoles] = await pool.execute(
+              `SELECT user_id, role FROM channel_members WHERE channel_id = ? AND user_id IN (${newIds.map(() => "?").join(",")})`,
+              [channelId, ...newIds]
+            );
+            
+            const roleMap = new Map(memberRoles.map((row) => [row.user_id, row.role]));
+            
+            // Emit event to each newly added member with their role
+            newIds.forEach((userId) => {
+              // Ensure all required fields are present and properly formatted
+              const channelWithRole = {
+                id: channel.id,
+                name: channel.name || "", // Ensure name is always a string
+                slug: channel.slug || "",
+                topic: topic, // Ensure topic is always a string (empty string if null)
+                is_private: channel.is_private || 0, // Ensure is_private is a number
+                role: roleMap.get(userId) || "member",
+              };
+              
+              io.emit("member:added_to_channel", {
+                channel: channelWithRole,
+                userId,
+              });
+            });
+          }
+        }
+      } catch (socketError) {
+        console.error("Failed to emit member:added_to_channel event:", socketError);
+        // Don't fail the request if socket emission fails
+      }
+
       return res.status(201).json(newMembers);
     } catch (error) {
       console.error("Add channel members error:", error);

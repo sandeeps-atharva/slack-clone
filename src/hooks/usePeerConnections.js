@@ -17,6 +17,8 @@ export function usePeerConnections(socket, localStream, callChannelId, currentUs
   const peerConnectionsRef = useRef({});
   const socketIdMapRef = useRef({}); // Maps userId to socketId
   const isNegotiatingRef = useRef({}); // Track if we're in the middle of negotiation
+  console.log("peerConnectionsRef",peerConnectionsRef);
+  
 
   // Helper function to create a peer connection
   const createPeerConnection = (userId, user, socketId, isInitiator = false) => {
@@ -25,6 +27,9 @@ export function usePeerConnections(socket, localStream, callChannelId, currentUs
       return peerConnectionsRef.current[userId];
     }
     const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+
+    console.log("pc",pc);
+    
 
     // Add local stream tracks
     if (localStream) {

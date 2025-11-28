@@ -57,3 +57,16 @@ export default function CameraCapture({ isOpen, onClose, onCapture, videoRef, er
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+

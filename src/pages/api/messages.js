@@ -27,6 +27,14 @@ async function constraintExists(table, constraint) {
   return rows.length > 0;
 }
 
+async function tableExists(tableName) {
+  const [rows] = await pool.query(
+    `SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`,
+    [tableName]
+  );
+  return rows.length > 0;
+}
+
 async function ensureMessageSchema() {
   try {
     if (!(await columnExists("messages", "channel_id"))) {
@@ -55,12 +63,29 @@ async function ensureMessageSchema() {
         }
       }
     }
+
+    // Create message_reads table for tracking read status
+    if (!(await tableExists("message_reads"))) {
+      await pool.execute(`
+        CREATE TABLE message_reads (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          message_id INT NOT NULL,
+          user_id INT NOT NULL,
+          read_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE KEY unique_message_read (message_id, user_id),
+          FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
+          INDEX idx_message_id (message_id),
+          INDEX idx_user_id (user_id)
+        )
+      `);
+    }
   } catch (error) {
     if (
       error.code !== "ER_DUP_KEYNAME" &&
       error.code !== "ER_NO_REFERENCED_TABLE" &&
       error.code !== "ER_CANT_CREATE_TABLE" &&
-      error.code !== "ER_CANNOT_ADD_FOREIGN"
+      error.code !== "ER_CANNOT_ADD_FOREIGN" &&
+      error.code !== "ER_TABLE_EXISTS_ERROR"
     ) {
       throw error;
     }
@@ -160,6 +185,7 @@ export default async function handler(req, res) {
       // Fetch reactions for all messages
       const messageIds = rows.map((msg) => msg.id).filter(Boolean);
       let reactionsByMessage = {};
+      let readStatusByMessage = {};
 
       if (messageIds.length > 0) {
         try {
@@ -198,15 +224,63 @@ export default async function handler(req, res) {
           // Reactions are optional, so we don't want to break message loading
           console.error("Error fetching reactions:", error);
         }
+
+        // Fetch read status for all messages
+        try {
+          const placeholders = messageIds.map(() => "?").join(",");
+          const [readStatuses] = await pool.execute(
+            `SELECT message_id, user_id, read_at
+             FROM message_reads
+             WHERE message_id IN (${placeholders})`,
+            messageIds
+          );
+
+          // Group read statuses by message
+          readStatuses.forEach((read) => {
+            const msgId = read.message_id;
+            if (!readStatusByMessage[msgId]) {
+              readStatusByMessage[msgId] = [];
+            }
+            readStatusByMessage[msgId].push({
+              userId: read.user_id,
+              readAt: read.read_at,
+            });
+          });
+        } catch (error) {
+          // If message_reads table doesn't exist yet, that's okay
+          console.error("Error fetching read status:", error);
+        }
       }
 
-      // Attach reactions to messages
-      const messagesWithReactions = rows.map((msg) => ({
-        ...msg,
-        reactions: reactionsByMessage[msg.id]
-          ? Object.values(reactionsByMessage[msg.id])
-          : [],
-      }));
+      // Get all channel members to determine recipients for each message
+      let channelMembers = [];
+      try {
+        const [members] = await pool.execute(
+          `SELECT user_id FROM channel_members WHERE channel_id = ?`,
+          [channelId]
+        );
+        channelMembers = members.map((m) => m.user_id);
+      } catch (error) {
+        console.error("Error fetching channel members:", error);
+      }
+
+      // Attach reactions and read status to messages
+      const messagesWithReactions = rows.map((msg) => {
+        // Determine recipients (all channel members except the sender)
+        const recipients = channelMembers.filter((memberId) => memberId !== msg.user_id);
+        const readBy = readStatusByMessage[msg.id] || [];
+        const readByUserIds = readBy.map((r) => r.user_id);
+        const allRecipientsRead = recipients.length > 0 && recipients.every((recipientId) => readByUserIds.includes(recipientId));
+
+        return {
+          ...msg,
+          reactions: reactionsByMessage[msg.id]
+            ? Object.values(reactionsByMessage[msg.id])
+            : [],
+          readBy: readByUserIds,
+          allRecipientsRead,
+        };
+      });
 
       return res.json(messagesWithReactions);
     } catch (error) {
@@ -222,8 +296,8 @@ export default async function handler(req, res) {
     const hasText = Boolean(trimmedMessage);
     const hasAttachment = attachment && attachment.fileUrl;
 
-    // System messages (call_started, call_ended) don't need text or attachment
-    const isSystemMessage = providedMessageType === "call_started" || providedMessageType === "call_ended";
+    // System messages (call_started, call_ended, member_added, member_left, member_removed, room_booking) don't need text or attachment
+    const isSystemMessage = providedMessageType === "call_started" || providedMessageType === "call_ended" || providedMessageType === "member_added" || providedMessageType === "member_left" || providedMessageType === "member_removed" || providedMessageType === "room_booking";
     
     if (!isSystemMessage && !hasText && !hasAttachment) {
       return res
